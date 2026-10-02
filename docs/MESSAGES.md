@@ -11,8 +11,8 @@ Meta limits to verify in M8 against current docs (design to these conservative v
 | `claim.ok.fixed` | Tap, fixed bill | "{merchant}\n{lines}\nTotal R{base}\n\nAdd a tip for {staff}?" | Tip 10% / Tip 15% / Other |
 | `claim.ok.open` | Tap, open amount | "{merchant}. How much would you like to pay?" | (free text number) |
 | `claim.ok.quicktip` | Tap, quick tip | "Say thanks to {staff}. Choose a tip." | R20 / R50 / Other |
-| `tip.custom.ask` | Other tapped | "Type the tip amount in rand, for example 25." | none |
-| `tip.custom.invalid` | Bad input | "Please send a number between 1 and {max}, or tap No tip." | No tip |
+| `tip.custom.ask` | Other tapped | "Type the tip in rand, for example 25, or as a percentage, for example 12%." | none |
+| `tip.custom.invalid` | Bad input | "Please send an amount between R1,00 and {max}, or a percentage up to 100%, or tap No tip." | No tip |
 | `confirm` | After tip | "Pay R{total}?\nBill R{base}\nTip R{tip}\nTo {merchant}" | Pay now / Change tip / Cancel |
 | `pay.link` | Pay now | "Tap to pay securely with Apple Pay, Google Pay or your bank: {url}\nThe link works for {minutes} minutes." | (link) |
 | `pay.success` | Webhook ok | "Paid. Thank you. Your slip is below." + slip image + receipt link | none |

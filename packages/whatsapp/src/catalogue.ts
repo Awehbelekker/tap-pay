@@ -58,13 +58,13 @@ export const catalogue = {
   },
 
   tipCustomAsk(): OutMessage {
-    return { kind: "text", body: "Type the tip amount in rand, for example 25." };
+    return { kind: "text", body: "Type the tip in rand, for example 25, or as a percentage, for example 12%." };
   },
 
   tipCustomInvalid(i: { max: Cents }): OutMessage {
     return {
       kind: "buttons",
-      body: `Please send an amount between R1,00 and ${R(i.max)}, or tap No tip.`,
+      body: `Please send an amount between R1,00 and ${R(i.max)}, or a percentage up to 100%, or tap No tip.`,
       buttons: [{ id: IDS.tipNone, title: "No tip" }],
     };
   },

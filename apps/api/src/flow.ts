@@ -9,6 +9,7 @@ import {
   newUrlToken,
   nextSession,
   parsePayCommand,
+  parsePercent,
   parseRands,
   percentTip,
   postingsForPayment,
@@ -259,7 +260,9 @@ export class PayFlow {
 
   private async onCustomTip(to: string, customerId: string, s: ActiveSession, text: string): Promise<void> {
     const base = cents(s.base ?? 0);
-    const tip = parseRands(text);
+    // "12%" is a percentage of the bill (round half up, SPEC 7); a bare number is rands.
+    const bp = parsePercent(text);
+    const tip = bp !== null ? (bp <= 10000 ? percentTip(base, bp) : null) : parseRands(text);
     if (tip === null || tip < MIN_CUSTOM_TIP || tip > base) {
       return this.send(to, customerId, s.merchantId, catalogue.tipCustomInvalid({ max: base }));
     }

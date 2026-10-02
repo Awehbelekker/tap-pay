@@ -273,13 +273,25 @@ describe.skipIf(!url)("tap to slip (e2e)", () => {
     const customer = "27820000011";
     await text(customer, await tap());
     await press(customer, "tip_custom");
-    expect(body(last(customer))).toContain("Type the tip amount");
+    expect(body(last(customer))).toContain("Type the tip in rand, for example 25, or as a percentage, for example 12%.");
     for (const bad of ["lots", "0,50", "101"]) {
       await text(customer, bad);
       expect(body(last(customer))).toContain("between R1,00 and R100,00");
     }
     await text(customer, "12,50");
     expect(body(last(customer))).toBe("Pay R112,50 to Demo Surf School?\nBeginner lesson: R100,00\nTip: R12,50");
+  });
+
+  it("custom tip as a typed percentage of the bill", async () => {
+    await newBill(33300);
+    const customer = "27820000021";
+    await text(customer, await tap());
+    await press(customer, "tip_custom");
+    await text(customer, "150%");
+    expect(body(last(customer))).toContain("percentage up to 100%");
+    await text(customer, "12,5%");
+    // 12.5% of R333,00 = R41,625 -> R41,63 (round half up)
+    expect(body(last(customer))).toBe("Pay R374,63 to Demo Surf School?\nBeginner lesson: R333,00\nTip: R41,63");
   });
 
   it("ignores a tip percentage the merchant did not offer", async () => {

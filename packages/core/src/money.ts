@@ -83,3 +83,13 @@ export function percentTip(bill: Cents, basisPoints: number): Cents {
   if (!Number.isInteger(basisPoints) || basisPoints < 0) throw new MoneyError(`bad tip basis points: ${basisPoints}`);
   return cents(Number((BigInt(bill) * BigInt(basisPoints) + 5000n) / 10000n));
 }
+
+/**
+ * Parse a typed percentage ("12%", "12.5 %", "12,5%") into basis points. The % sign is
+ * required so "15" stays a rand amount. Max 2 decimals; null for anything else.
+ */
+export function parsePercent(input: string): number | null {
+  const m = /^\s*(\d{1,3})(?:[.,](\d{1,2}))?\s*%\s*$/.exec(input);
+  if (!m) return null;
+  return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
+}

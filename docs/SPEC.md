@@ -95,7 +95,7 @@ All transitions are pure functions in `packages/core/state`. Illegal transitions
 
 - Presets: No tip, 10%, 15%, 20%, Custom (configurable per merchant, max 4 presets plus custom).
 - Percent tip = round half up to the cent on the bill amount (not on any prior tip).
-- Custom tip: numeric rands (up to 2 decimals), min R1.00 when non-zero, max 100% of the bill (configurable cap). Invalid input re-asks.
+- Custom tip: numeric rands (up to 2 decimals), or a typed percentage of the bill such as `12%` or `12,5%` (the % sign is required, up to 2 decimals, rounded half up like the presets). Min R1.00 when non-zero, max 100% of the bill (configurable cap). Invalid input re-asks.
 - Quick tip mode: presets R5, R10, R20 and Other; min R2.00, max R1,000.00 (configurable).
 - Tip and bill are separate ledger lines on one payment.
 

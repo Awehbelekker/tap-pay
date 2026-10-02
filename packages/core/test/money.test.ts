@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { cents, formatRands, MoneyError, parseRands, percentTip, shareFloor, signedCents } from "../src/money.js";
+import { cents, formatRands, MoneyError, parsePercent, parseRands, percentTip, shareFloor, signedCents } from "../src/money.js";
 
 describe("cents", () => {
   it("rejects floats, negatives and unsafe integers", () => {
@@ -86,5 +86,22 @@ describe("percentTip", () => {
         expect(t).toBeGreaterThanOrEqual(0);
       }),
     );
+  });
+});
+
+describe("parsePercent", () => {
+  it.each([
+    ["12%", 1200],
+    ["12.5%", 1250],
+    ["12,5 %", 1250],
+    [" 7 % ", 700],
+    ["0.25%", 25],
+    ["100%", 10000],
+  ])("%s -> %d bp", (input, bp) => {
+    expect(parsePercent(input)).toBe(bp);
+  });
+
+  it.each(["12", "%", "12.345%", "-5%", "1000%", "abc%", "12%%"])("rejects %j", (input) => {
+    expect(parsePercent(input)).toBeNull();
   });
 });
