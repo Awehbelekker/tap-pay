@@ -451,7 +451,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Send WhatsApp OTP to a staff number */
+        /** Send a WhatsApp sign-in code to a staff number. Always 202 (never reveals whether the number is staff). Max 3 per 15 minutes. */
         post: {
             parameters: {
                 query?: never;
@@ -467,7 +467,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description sent */
+                /** @description accepted */
                 202: {
                     headers: {
                         [name: string]: unknown;
@@ -491,7 +491,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Verify OTP and set PIN on first use */
+        /** Verify the code (5 tries) and enrol this device; sets the PIN on first sign-in (4-6 digits */
         post: {
             parameters: {
                 query?: never;
@@ -505,6 +505,9 @@ export interface paths {
                         msisdn: string;
                         code: string;
                         pin?: string;
+                        /** Format: uuid */
+                        merchantId?: string;
+                        deviceLabel?: string;
                     };
                 };
             };
@@ -514,8 +517,13 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Tokens"];
+                    };
                 };
+                400: components["responses"]["Err"];
+                401: components["responses"]["Err"];
+                409: components["responses"]["Err"];
             };
         };
         delete?: never;
@@ -533,7 +541,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** msisdn + PIN login */
+        /** PIN sign-in on an enrolled device. 5 wrong PINs lock for 15 minutes (423). */
         post: {
             parameters: {
                 query?: never;
@@ -541,16 +549,28 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        msisdn: string;
+                        pin: string;
+                        /** Format: uuid */
+                        deviceId: string;
+                    };
+                };
+            };
             responses: {
                 /** @description tokens */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Tokens"];
+                    };
                 };
                 401: components["responses"]["Err"];
+                423: components["responses"]["Err"];
             };
         };
         delete?: never;
@@ -568,7 +588,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rotate refresh token */
+        /** Rotate the refresh token. Re-using a rotated token revokes the family. */
         post: {
             parameters: {
                 query?: never;
@@ -576,9 +596,58 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        refreshToken: string;
+                    };
+                };
+            };
             responses: {
                 /** @description tokens */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Tokens"];
+                    };
+                };
+                401: components["responses"]["Err"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke the refresh token family */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        refreshToken?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -587,6 +656,154 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Signed-in staff member */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description me */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/me/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Mute or unmute alerts for me */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        muted: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/reports/today": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Today's paid count */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description totals */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/devices/current/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save or clear this device's Web Push subscription */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        subscription: Record<string, never> | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -903,7 +1120,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Server-sent events stream */
+        /** Server-sent events: bill.created, bill.claimed, share.claimed, bill.updated, bill.released, bill.cancelled, bill.paid, bill.failed. Resume with Last-Event-ID. EventSource may pass ?access_token=. Heartbeat every 25 s. */
         get: {
             parameters: {
                 query?: never;
@@ -1040,6 +1257,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Managers see all tags; staff see their own and unassigned ones */
         get: {
             parameters: {
                 query?: never;
@@ -1059,32 +1277,60 @@ export interface paths {
             };
         };
         put?: never;
-        /** Claim/assign a tag by code */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description assigned */
-                201: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/merchant/tags/{id}/revoke": {
+    "/v1/merchant/tags/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Manager assigns a tag provisioned to this merchant to a person (or none */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        assignedUserId: string | null;
+                        label?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description assigned */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Err"];
+                404: components["responses"]["Err"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/tags/{code}/revoke": {
         parameters: {
             query?: never;
             header?: never;
@@ -1098,7 +1344,7 @@ export interface paths {
                 query?: never;
                 header?: never;
                 path: {
-                    id: string;
+                    code: string;
                 };
                 cookie?: never;
             };
@@ -1701,6 +1947,13 @@ export interface components {
             method?: string;
             /** Format: date-time */
             paidAt?: string;
+        };
+        Tokens: {
+            accessToken: string;
+            refreshToken: string;
+            /** Format: uuid */
+            deviceId: string;
+            expiresIn: number;
         };
         SplitRule: {
             /** Format: uuid */

@@ -42,6 +42,7 @@ export interface MerchantsTable {
   tip_min_cents: Generated<number>;
   tip_max_bp: Generated<number>;
   tip_max_cents: number | null;
+  notify_managers: Generated<"each_payment" | "daily_summary" | "off">;
   created_at: Generated<Date>;
 }
 
@@ -53,6 +54,9 @@ export interface UsersTable {
   msisdn_enc: Buffer;
   msisdn_hash: Buffer;
   pin_hash: string | null;
+  pin_failures: Generated<number>;
+  pin_locked_until: Date | null;
+  notify_mute: Generated<boolean>;
   active: Generated<boolean>;
   created_at: Generated<Date>;
 }
@@ -90,7 +94,7 @@ export interface CustomersTable {
 export interface BillLine {
   description: string;
   amountCents: number;
-  quantity?: number;
+  quantity?: number | undefined;
 }
 
 export interface BillsTable {
@@ -242,7 +246,78 @@ export interface AuditLogTable {
   created_at: Generated<Date>;
 }
 
+export interface DevicesTable {
+  id: Generated<string>;
+  user_id: string;
+  merchant_id: string;
+  label: string | null;
+  push_subscription: ColumnType<unknown, string | null, string | null> | null;
+  last_seen_at: Date | null;
+  revoked_at: Date | null;
+  created_at: Generated<Date>;
+}
+
+export interface OtpCodesTable {
+  id: Generated<string>;
+  user_id: string;
+  code_hash: Buffer;
+  attempts: Generated<number>;
+  expires_at: Date;
+  used_at: Date | null;
+  created_at: Generated<Date>;
+}
+
+export interface RefreshTokensTable {
+  id: Generated<string>;
+  user_id: string;
+  device_id: string;
+  family_id: string;
+  token_hash: Buffer;
+  expires_at: Date;
+  rotated_at: Date | null;
+  revoked_at: Date | null;
+  created_at: Generated<Date>;
+}
+
+export interface MerchantEventsTable {
+  id: Generated<number>;
+  merchant_id: string;
+  name: string;
+  bill_id: string | null;
+  user_id: string | null;
+  payload: ColumnType<Record<string, unknown>, string, never>;
+  created_at: Generated<Date>;
+}
+
+export interface NotificationsTable {
+  id: Generated<string>;
+  merchant_id: string;
+  user_id: string | null;
+  event: string;
+  payload: ColumnType<Record<string, unknown>, string, string>;
+  channel: "sse" | "push" | "whatsapp" | "sms";
+  status: Generated<"pending" | "sent" | "failed" | "skipped">;
+  attempts: Generated<number>;
+  dedupe_key: string;
+  attempted_at: Date | null;
+  error: string | null;
+  created_at: Generated<Date>;
+}
+
+export interface IdempotencyKeysTable {
+  key: string;
+  scope: string;
+  response: ColumnType<unknown, string | null, string | null> | null;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
+  devices: DevicesTable;
+  otp_codes: OtpCodesTable;
+  refresh_tokens: RefreshTokensTable;
+  merchant_events: MerchantEventsTable;
+  notifications: NotificationsTable;
+  idempotency_keys: IdempotencyKeysTable;
   merchants: MerchantsTable;
   users: UsersTable;
   tags: TagsTable;

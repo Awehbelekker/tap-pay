@@ -74,6 +74,7 @@ import {
   type Database,
 } from "@tappay/db";
 import { isValidTagCode, waMeLink } from "@tappay/tag";
+import type { FlowEvents } from "./notifier.js";
 import {
   catalogue,
   IDS,
@@ -97,6 +98,8 @@ import {
  */
 
 export interface FlowDeps {
+  /** Live events and staff alerts (M4). Optional so the flow runs without them in tests. */
+  events?: FlowEvents;
   config: Config;
   db: Kysely<Database>;
   crypto: Crypto;
@@ -154,6 +157,23 @@ export class PayFlow {
 
   private now(): Date {
     return this.d.clock.now();
+  }
+
+  /** Tell the merchant PWA. Never lets a notification problem break the customer's flow. */
+  private async notify(fn: (e: FlowEvents) => Promise<void>): Promise<void> {
+    if (!this.d.events) return;
+    try {
+      await fn(this.d.events);
+    } catch (e) {
+      this.d.log.error({ err: (e as Error).message }, "merchant event failed");
+    }
+  }
+
+  private async billEvent(merchantId: string, billId: string, name: string): Promise<void> {
+    const bill = await getBill(this.d.db, merchantId, billId);
+    await this.notify((e) =>
+      e.billChanged({ merchantId, billId, name, staffUserId: bill?.assigned_user_id ?? null, createdBy: bill?.created_by ?? null, payload: { status: bill?.status } }),
+    );
   }
 
   private sessionExpiry(): Date {
@@ -280,7 +300,9 @@ export class PayFlow {
     if (!s.billId) return;
     const bill = await getBill(db, s.merchantId, s.billId);
     if (bill?.status === "claimed" && bill.customer_id === customerId) {
-      await transitionBill(db, s.billId, "claimed", "release", { customer_id: null, claimed_at: null });
+      if (await transitionBill(db, s.billId, "claimed", "release", { customer_id: null, claimed_at: null })) {
+        await this.billEvent(s.merchantId, s.billId, "bill.released");
+      }
     }
   }
 
@@ -406,6 +428,7 @@ export class PayFlow {
     const won = await transitionBill(db, billId, "open", "claim", { customer_id: customerId, claimed_at: this.now() });
     if (!won) return this.send(to, customerId, merchantId, catalogue.billClaimedOther({ merchant }));
     await audit(db, { merchantId, actorKind: "customer", actorId: customerId, action: "bill.claimed", entity: "bill", entityId: billId });
+    await this.billEvent(merchantId, billId, "bill.claimed");
     const bill = await getBill(db, merchantId, billId);
     return this.startSession(to, customerId, merchantId, tipsEnabled, { billId, base: bill?.subtotal_cents ?? 0 });
   }
@@ -449,6 +472,7 @@ export class PayFlow {
     const won = share.status === "open" && (await transitionShare(db, share.id, "open", "claim", { customer_id: customerId, claimed_at: this.now() }));
     if (!won) return this.offerShares(to, customerId, share.merchant_id, share.bill_id, m.name);
     await audit(db, { merchantId: share.merchant_id, actorKind: "customer", actorId: customerId, action: "share.claimed", entity: "bill_share", entityId: share.id });
+    await this.billEvent(share.merchant_id, share.bill_id, "share.claimed");
     return this.startSession(to, customerId, share.merchant_id, m.tips_enabled, { billId: share.bill_id, shareId: share.id, base: share.amount_cents });
   }
 
@@ -818,7 +842,26 @@ export class PayFlow {
         const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(now).replaceAll("-", "");
         await createReceipt(trx, { merchantId: p.merchantId, paymentId: p.id, token, number: `R-${day}-${p.id.slice(0, 6).toUpperCase()}` });
         await flag(trx, p.merchantId, p.id, "payment.succeeded");
-        return { kind: "paid" as const, paymentId: p.id, merchantId: p.merchantId, customerId: p.customerId, total: cents(p.amount), receiptToken: token };
+        return {
+          kind: "paid" as const,
+          paymentId: p.id,
+          merchantId: p.merchantId,
+          customerId: p.customerId,
+          total: cents(p.amount),
+          receiptToken: token,
+          alert: {
+            merchantId: p.merchantId,
+            billId: p.billId,
+            paymentId: p.id,
+            staffUserId: bill?.assigned_user_id ?? null,
+            createdBy: bill?.created_by ?? null,
+            customerId: p.customerId,
+            description: bill?.type === "quick_tip" ? "Tip" : describeLines(bill?.lines),
+            base,
+            tip,
+            total: p.amount,
+          },
+        };
       }
 
       // Failure or cancellation of the checkout.
@@ -827,7 +870,24 @@ export class PayFlow {
       }
       if (p.sessionStatus === "awaiting_payment") await transitionSession(trx, p.sessionId, "awaiting_payment", "payment_failed");
       await flag(trx, p.merchantId, p.id, "payment.failed");
-      return { kind: "failed" as const, merchantId: p.merchantId, customerId: p.customerId };
+      const bill = p.billId ? await getBill(trx, p.merchantId, p.billId) : undefined;
+      return {
+        kind: "failed" as const,
+        merchantId: p.merchantId,
+        customerId: p.customerId,
+        alert: {
+          merchantId: p.merchantId,
+          billId: p.billId,
+          paymentId: p.id,
+          staffUserId: bill?.assigned_user_id ?? null,
+          createdBy: bill?.created_by ?? null,
+          customerId: p.customerId,
+          description: bill?.type === "quick_tip" ? "Tip" : describeLines(bill?.lines),
+          base: p.base ?? 0,
+          tip: p.tip,
+          total: p.amount,
+        },
+      };
     });
 
     if (result.kind === "error") {
@@ -836,7 +896,10 @@ export class PayFlow {
     }
     if (result.kind === "duplicate") return { status: "ignored" };
 
-    // After commit: tell the customer. A send failure never undoes the payment.
+    // After commit: tell the merchant (PWA, push, WhatsApp) and the customer. A send failure
+    // never undoes the payment.
+    const alert = result.alert;
+    await this.notify((e) => (result.kind === "paid" ? e.paymentSucceeded(alert) : e.paymentFailed(alert)));
     const to = await customerMsisdn(db, this.d.crypto, result.customerId);
     const merchant = (await db.selectFrom("merchants").select("name").where("id", "=", result.merchantId).executeTakeFirst())?.name ?? "";
     if (to) {
@@ -898,6 +961,7 @@ export class PayFlow {
       }),
     );
     await audit(db, { merchantId: i.merchantId, actorKind: "user", actorId: i.createdBy, action: "bill.created", entity: "bill", entityId: bill.id });
+    await this.billEvent(i.merchantId, bill.id, "bill.created");
     return { bill, billCode: bill.bill_code, link: `${config.PUBLIC_API_URL}/b/${bill.bill_token}` };
   }
 
@@ -909,6 +973,7 @@ export class PayFlow {
     const touched = await this.cancelSessions(merchantId, billId, catalogue.billReleased);
     if (bill.status === "claimed") await transitionBill(db, billId, "claimed", "release", { customer_id: null, claimed_at: null });
     await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.released", entity: "bill", entityId: billId, detail: { sessionsCancelled: touched.length } });
+    await this.billEvent(merchantId, billId, "bill.released");
   }
 
   /**
@@ -926,6 +991,7 @@ export class PayFlow {
     if (!(await setBillLines(db, merchantId, billId, lines))) throw new FlowError("not_editable", "bill is no longer open");
     const touched = await this.cancelSessions(merchantId, billId, catalogue.amountChanged);
     await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.edited", entity: "bill", entityId: billId, detail: { from: before.subtotal_cents, to: linesTotal(lines) } });
+    await this.billEvent(merchantId, billId, "bill.updated");
     // The customer who held the bill gets the new amount straight away.
     const after = await getBill(db, merchantId, billId);
     if (after?.status === "claimed" && after.customer_id) {
@@ -948,6 +1014,7 @@ export class PayFlow {
     }
     await transitionBill(db, billId, bill.status, "cancel");
     await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.cancelled", entity: "bill", entityId: billId });
+    await this.billEvent(merchantId, billId, "bill.cancelled");
   }
 
   /** Cancel every in-progress session on a bill and tell each customer why. */

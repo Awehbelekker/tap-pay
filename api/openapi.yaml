@@ -58,6 +58,10 @@ components:
         status: {type: string}
         method: {type: string}
         paidAt: {type: string, format: date-time}
+    Tokens:
+      type: object
+      required: [accessToken, refreshToken, deviceId, expiresIn]
+      properties: {accessToken: {type: string}, refreshToken: {type: string}, deviceId: {type: string, format: uuid}, expiresIn: {type: integer}}
     SplitRule:
       type: object
       required: [appliesTo, partyKind, basisPoints]
@@ -133,13 +137,23 @@ paths:
     post: {tags: [public], summary: Resolve mock checkout, parameters: [{name: ref, in: path, required: true, schema: {type: string}}], responses: {'200': {description: ok}}}
 
   /v1/auth/otp/request:
-    post: {tags: [auth], summary: Send WhatsApp OTP to a staff number, requestBody: {content: {application/json: {schema: {type: object, required: [msisdn], properties: {msisdn: {type: string}}}}}}, responses: {'202': {description: sent}}}
+    post: {tags: [auth], summary: Send a WhatsApp sign-in code to a staff number. Always 202 (never reveals whether the number is staff). Max 3 per 15 minutes., requestBody: {content: {application/json: {schema: {type: object, required: [msisdn], properties: {msisdn: {type: string}}}}}}, responses: {'202': {description: accepted}}}
   /v1/auth/otp/verify:
-    post: {tags: [auth], summary: Verify OTP and set PIN on first use, requestBody: {content: {application/json: {schema: {type: object, required: [msisdn, code], properties: {msisdn: {type: string}, code: {type: string}, pin: {type: string}}}}}}, responses: {'200': {description: tokens}}}
+    post: {tags: [auth], summary: Verify the code (5 tries) and enrol this device; sets the PIN on first sign-in (4-6 digits, not trivial). 409 choose_merchant lists merchants when the number is staff at several., requestBody: {content: {application/json: {schema: {type: object, required: [msisdn, code], properties: {msisdn: {type: string}, code: {type: string}, pin: {type: string}, merchantId: {type: string, format: uuid}, deviceLabel: {type: string}}}}}}, responses: {'200': {description: tokens, content: {application/json: {schema: {$ref: '#/components/schemas/Tokens'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}}
   /v1/auth/login:
-    post: {tags: [auth], summary: msisdn + PIN login, responses: {'200': {description: tokens}, '401': {$ref: '#/components/responses/Err'}}}
+    post: {tags: [auth], summary: PIN sign-in on an enrolled device. 5 wrong PINs lock for 15 minutes (423)., requestBody: {content: {application/json: {schema: {type: object, required: [msisdn, pin, deviceId], properties: {msisdn: {type: string}, pin: {type: string}, deviceId: {type: string, format: uuid}}}}}}, responses: {'200': {description: tokens, content: {application/json: {schema: {$ref: '#/components/schemas/Tokens'}}}}, '401': {$ref: '#/components/responses/Err'}, '423': {$ref: '#/components/responses/Err'}}}
   /v1/auth/refresh:
-    post: {tags: [auth], summary: Rotate refresh token, responses: {'200': {description: tokens}}}
+    post: {tags: [auth], summary: Rotate the refresh token. Re-using a rotated token revokes the family., requestBody: {content: {application/json: {schema: {type: object, required: [refreshToken], properties: {refreshToken: {type: string}}}}}}, responses: {'200': {description: tokens, content: {application/json: {schema: {$ref: '#/components/schemas/Tokens'}}}}, '401': {$ref: '#/components/responses/Err'}}}
+  /v1/auth/logout:
+    post: {tags: [auth], summary: Revoke the refresh token family, requestBody: {content: {application/json: {schema: {type: object, properties: {refreshToken: {type: string}}}}}}, responses: {'200': {description: ok}}}
+  /v1/merchant/me:
+    get: {tags: [merchant], security: [{bearer: []}], summary: Signed-in staff member, merchant settings, own tags and the VAPID public key, responses: {'200': {description: me}}}
+  /v1/merchant/me/settings:
+    put: {tags: [merchant], security: [{bearer: []}], summary: Mute or unmute alerts for me, requestBody: {content: {application/json: {schema: {type: object, required: [muted], properties: {muted: {type: boolean}}}}}}, responses: {'200': {description: ok}}}
+  /v1/merchant/reports/today:
+    get: {tags: [merchant], security: [{bearer: []}], summary: Today's paid count, total and tips (SAST). Staff see their own., responses: {'200': {description: totals}}}
+  /v1/merchant/devices/current/push:
+    put: {tags: [merchant], security: [{bearer: []}], summary: Save or clear this device's Web Push subscription, requestBody: {content: {application/json: {schema: {type: object, required: [subscription], properties: {subscription: {type: [object, 'null']}}}}}}, responses: {'200': {description: ok}}}
 
   /v1/merchant/bills:
     get:
@@ -165,7 +179,7 @@ paths:
   /v1/merchant/bills/{id}/mark-paid-other: {post: {tags: [merchant], security: [{bearer: []}], summary: Paid by cash or other method, parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}}}}
   /v1/merchant/bills/{id}/write-off: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}}}}
   /v1/merchant/events:
-    get: {tags: [merchant], security: [{bearer: []}], summary: Server-sent events stream, responses: {'200': {description: text/event-stream, content: {text/event-stream: {schema: {type: string}}}}}}
+    get: {tags: [merchant], security: [{bearer: []}], summary: 'Server-sent events: bill.created, bill.claimed, share.claimed, bill.updated, bill.released, bill.cancelled, bill.paid, bill.failed. Resume with Last-Event-ID. EventSource may pass ?access_token=. Heartbeat every 25 s.', responses: {'200': {description: text/event-stream, content: {text/event-stream: {schema: {type: string}}}}}}
   /v1/merchant/services:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
     post: {tags: [merchant], security: [{bearer: []}], responses: {'201': {description: created}}}
@@ -173,9 +187,10 @@ paths:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
     post: {tags: [merchant], security: [{bearer: []}], summary: Invite staff by number, responses: {'201': {description: invited}}}
   /v1/merchant/tags:
-    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
-    post: {tags: [merchant], security: [{bearer: []}], summary: Claim/assign a tag by code, responses: {'201': {description: assigned}}}
-  /v1/merchant/tags/{id}/revoke: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: revoked}}}}
+    get: {tags: [merchant], security: [{bearer: []}], summary: Managers see all tags; staff see their own and unassigned ones, responses: {'200': {description: list}}}
+  /v1/merchant/tags/{code}:
+    put: {tags: [merchant], security: [{bearer: []}], summary: Manager assigns a tag provisioned to this merchant to a person (or none, for a till or table), parameters: [{name: code, in: path, required: true, schema: {type: string}}], requestBody: {content: {application/json: {schema: {type: object, required: [assignedUserId], properties: {assignedUserId: {type: [string, 'null'], format: uuid}, label: {type: string}}}}}}, responses: {'200': {description: assigned}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/tags/{code}/revoke: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: code, in: path, required: true, schema: {type: string}}], responses: {'200': {description: revoked}}}}
   /v1/merchant/split-rules:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/SplitRule'}}}}}}}
     put: {tags: [merchant], security: [{bearer: []}], summary: Replace rule set. Each applies_to group must total 10000 bp., responses: {'200': {description: saved}, '422': {$ref: '#/components/responses/Err'}}}

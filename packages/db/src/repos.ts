@@ -161,6 +161,7 @@ export async function createBill(
 
 const BILL_COLS = [
   "bills.id",
+  "bills.created_by",
   "bills.merchant_id",
   "bills.type",
   "bills.tag_id",
@@ -618,4 +619,80 @@ export async function audit(
     .insertInto("audit_log")
     .values({ merchant_id: i.merchantId, actor_kind: i.actorKind, actor_id: i.actorId, action: i.action, entity: i.entity, entity_id: i.entityId, detail: JSON.stringify(i.detail ?? {}) })
     .execute();
+}
+
+// ── Merchant API reads (M4) ──────────────────────────────────────────────────
+
+/**
+ * Bills for the merchant PWA. Staff see only bills they created or are assigned to; managers
+ * see all. Tenant scope is the first predicate on every query.
+ */
+export async function listMerchantBills(
+  db: Db,
+  i: { merchantId: string; onlyUserId: string | null; statuses: string[] | null; billId?: string; limit: number },
+) {
+  let q = db
+    .selectFrom("bills")
+    .leftJoin("tags", "tags.id", "bills.tag_id")
+    .leftJoin("customers", "customers.id", "bills.customer_id")
+    .leftJoin("users", "users.id", "bills.assigned_user_id")
+    .select([
+      "bills.id",
+      "bills.type",
+      "bills.status",
+      "bills.lines",
+      "bills.subtotal_cents",
+      "bills.bill_code",
+      "bills.bill_token",
+      "bills.table_label",
+      "bills.expires_at",
+      "bills.paid_at",
+      "bills.created_at",
+      "bills.version",
+      "bills.created_by",
+      "bills.assigned_user_id",
+      "tags.code as tag_code",
+      "users.display_name as staff_name",
+      "customers.msisdn_enc as customer_enc",
+      "customers.profile_name as customer_name",
+    ])
+    .select(
+      sql<number>`(select coalesce(sum(s.tip_cents), 0) from sessions s
+                   where s.bill_id = bills.id and s.status in ('paid', 'refunded', 'partially_refunded'))`.as("tip_cents"),
+    )
+    .select((eb) =>
+      eb.exists(eb.selectFrom("bill_shares").select("bill_shares.id").whereRef("bill_shares.bill_id", "=", "bills.id")).as("has_shares"),
+    )
+    .where("bills.merchant_id", "=", i.merchantId);
+  if (i.onlyUserId) {
+    const uid = i.onlyUserId;
+    q = q.where((eb) => eb.or([eb("bills.created_by", "=", uid), eb("bills.assigned_user_id", "=", uid)]));
+  }
+  if (i.statuses?.length) q = q.where("bills.status", "in", i.statuses as never[]);
+  if (i.billId) q = q.where("bills.id", "=", i.billId);
+  return q.orderBy("bills.created_at", "desc").limit(i.limit).execute();
+}
+
+/** Today's paid totals in South African time (staff: their own bills). */
+export async function todaySummary(db: Db, merchantId: string, onlyUserId: string | null, now: Date) {
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(now);
+  const start = new Date(`${day}T00:00:00+02:00`);
+  let q = db
+    .selectFrom("payments")
+    .innerJoin("sessions", "sessions.id", "payments.session_id")
+    .leftJoin("bills", "bills.id", "sessions.bill_id")
+    .select((eb) => [
+      eb.fn.countAll<number>().as("count"),
+      eb.fn.coalesce(eb.fn.sum<number>("payments.amount_cents"), eb.lit(0)).as("total"),
+      eb.fn.coalesce(eb.fn.sum<number>("sessions.tip_cents"), eb.lit(0)).as("tips"),
+    ])
+    .where("payments.merchant_id", "=", merchantId)
+    .where("payments.status", "=", "succeeded")
+    .where("payments.updated_at", ">=", start);
+  if (onlyUserId) {
+    const uid = onlyUserId;
+    q = q.where((eb) => eb.or([eb("bills.created_by", "=", uid), eb("bills.assigned_user_id", "=", uid)]));
+  }
+  const r = await q.executeTakeFirstOrThrow();
+  return { date: day, count: Number(r.count), totalCents: Number(r.total), tipCents: Number(r.tips) };
 }

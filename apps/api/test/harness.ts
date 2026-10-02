@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { expect } from "vitest";
 import { loadConfig, type Config } from "@tappay/config";
 import { Crypto, type DbHandle } from "@tappay/db";
@@ -8,6 +9,8 @@ import { FixedClock, testEnv } from "@tappay/testkit";
 import { inboundPayload, sign, type Inbound } from "@tappay/wa-sim";
 import { SimWhatsAppClient, type SimMessage } from "@tappay/whatsapp";
 import { buildApp } from "../src/app.js";
+import type { Tokens } from "../src/auth.js";
+import { MemoryPushClient } from "../src/push.js";
 import type { PayFlow } from "../src/flow.js";
 
 /**
@@ -21,6 +24,7 @@ export class Harness {
   app!: FastifyInstance;
   wa!: SimWhatsAppClient;
   provider!: MockPaymentProvider;
+  push!: MemoryPushClient;
   flow!: PayFlow;
 
   constructor(
@@ -36,7 +40,8 @@ export class Harness {
     this.clock.set(new Date());
     this.wa = new SimWhatsAppClient();
     this.provider = new MockPaymentProvider({ secret: this.config.MOCK_PROVIDER_SECRET, publicApiUrl: this.config.PUBLIC_API_URL, clock: this.clock, checkoutTtlMinutes: 10 });
-    this.app = buildApp({ config: this.config, db: this.h, queue: { ready: async () => true }, clock: this.clock, wa: this.wa, provider: this.provider });
+    this.push = new MemoryPushClient();
+    this.app = buildApp({ config: this.config, db: this.h, queue: { ready: async () => true }, clock: this.clock, wa: this.wa, provider: this.provider, push: this.push });
     await this.app.ready();
     this.flow = (this.app as unknown as { payFlow: PayFlow }).payFlow;
   }
@@ -125,8 +130,37 @@ export class Harness {
     return (await this.h.db.selectFrom("bills").select("status").where("id", "=", id).executeTakeFirstOrThrow()).status;
   }
 
+  // ── Staff (merchant PWA) ──────────────────────────────────────────────────
+
+  /** The sign-in code WhatsApp delivered to this number (sim outbox, template "otp"). */
+  lastOtp(msisdn: string): string {
+    const m = this.wa.messagesTo(msisdn).filter((x) => x.kind === "template" && x.template === "otp").at(-1);
+    expect(m, `no OTP sent to ${msisdn}`).toBeDefined();
+    return (m as { params: string[] }).params[0]!;
+  }
+
+  /** First sign-in on a new device: OTP by WhatsApp, then set the PIN. */
+  async enrol(msisdn: string, pin = "4826", merchantId?: string): Promise<Tokens> {
+    const r1 = await this.app.inject({ method: "POST", url: "/v1/auth/otp/request", payload: { msisdn } });
+    expect(r1.statusCode).toBe(202);
+    const code = this.lastOtp(msisdn);
+    const r2 = await this.app.inject({ method: "POST", url: "/v1/auth/otp/verify", payload: { msisdn, code, pin, ...(merchantId ? { merchantId } : {}) } });
+    expect(r2.statusCode, r2.body).toBe(200);
+    return r2.json();
+  }
+
+  async api(
+    token: string,
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+    url: string,
+    payload?: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<{ statusCode: number; body: string; json: () => any }> {
+    return this.app.inject({ method, url, headers: { authorization: `Bearer ${token}`, ...headers }, ...(payload === undefined ? {} : { payload: payload as never }) });
+  }
+
   /** A second merchant with its own staff member and tag, for the other modes. */
-  async addMerchant(i: { name: string; mode: string; noBillAction?: "none" | "ask_amount" | null; staff?: string; tagCode: string }) {
+  async addMerchant(i: { name: string; mode: string; noBillAction?: "none" | "ask_amount" | null; staff?: string; staffMsisdn?: string; staffRole?: "owner" | "manager" | "staff"; tagCode: string }) {
     const { db } = this.h;
     const m = await db
       .insertInto("merchants")
@@ -135,11 +169,11 @@ export class Harness {
       .executeTakeFirstOrThrow();
     let staffId: string | null = null;
     if (i.staff) {
-      const num = `2760${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+      const num = i.staffMsisdn ?? `2760${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
       staffId = (
         await db
           .insertInto("users")
-          .values({ merchant_id: m.id, display_name: i.staff, role: "staff", msisdn_enc: this.crypto.encrypt(num), msisdn_hash: this.crypto.lookupHash(num), pin_hash: null })
+          .values({ merchant_id: m.id, display_name: i.staff, role: i.staffRole ?? "staff", msisdn_enc: this.crypto.encrypt(num), msisdn_hash: this.crypto.lookupHash(num), pin_hash: null })
           .returning("id")
           .executeTakeFirstOrThrow()
       ).id;
