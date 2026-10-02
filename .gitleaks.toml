@@ -8,4 +8,6 @@ paths = [
   '''^\.env\.example$''',
   '''^packages/testkit/src/index\.ts$''',
   '''(^|/)test/.*\.test\.ts$''',
+  # Browser-test stack settings (apps/web/e2e/env.ts): fake values for a throwaway local database.
+  '''^apps/web/e2e/''',
 ]
