@@ -1085,6 +1085,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/merchant/unpaid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bills left unpaid (abandoned or needing follow-up). Staff see their own. The full number only when typed by the merchant or shared by the customer. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["UnpaidBill"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/merchant/bills/{id}/remind": {
         parameters: {
             query?: never;
@@ -1094,7 +1132,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Send manual reminder (counts toward cap) */
+        /** Send a reminder now if the rules allow (08:00 to 20:00 SAST */
         post: {
             parameters: {
                 query?: never;
@@ -1106,13 +1144,26 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
+                /** @description sent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReminderResult"];
+                    };
+                };
                 /** @description queued */
                 202: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ReminderResult"];
+                    };
                 };
+                404: components["responses"]["Err"];
+                409: components["responses"]["Err"];
                 429: components["responses"]["Err"];
             };
         };
@@ -1131,7 +1182,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Paid by cash or other method */
+        /** Paid by cash or another way (reason required). Reminders stop. */
         post: {
             parameters: {
                 query?: never;
@@ -1141,7 +1192,13 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        reason: string;
+                    };
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
@@ -1150,6 +1207,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                409: components["responses"]["Err"];
+                422: components["responses"]["Err"];
             };
         };
         delete?: never;
@@ -1167,6 +1226,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Write off an unpaid bill (manager */
         post: {
             parameters: {
                 query?: never;
@@ -1176,7 +1236,13 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        reason: string;
+                    };
+                };
+            };
             responses: {
                 /** @description ok */
                 200: {
@@ -1185,6 +1251,9 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Err"];
+                409: components["responses"]["Err"];
+                422: components["responses"]["Err"];
             };
         };
         delete?: never;
@@ -2150,6 +2219,7 @@ export interface paths {
                         name?: string;
                         priceCents?: number;
                         active?: boolean;
+                        remindersEnabled?: boolean;
                     };
                 };
             };
@@ -2715,6 +2785,40 @@ export interface components {
             /** @enum {string} */
             notifyManagers?: "each_payment" | "daily_summary" | "off";
             quickTipPresetsCents?: number[];
+            reminderCount?: number;
+            reminderFirstDelayMinutes?: number;
+            /** @description SAST hour */
+            reminderWindowStart?: number;
+            /** @description SAST hour (exclusive) */
+            reminderWindowEnd?: number;
+        };
+        UnpaidBill: {
+            /** Format: uuid */
+            id?: string;
+            /** @enum {string} */
+            status?: "abandoned" | "needs_follow_up";
+            description?: string;
+            amountCents?: number;
+            /** Format: date-time */
+            abandonedAt?: string;
+            staffName?: string | null;
+            customer?: {
+                name?: string | null;
+                maskedNumber?: string | null;
+                number?: string | null;
+            };
+            remindersSent?: number;
+            reminderLimit?: number;
+            /** Format: date-time */
+            nextReminderAt?: string | null;
+            optedOut?: boolean;
+            link?: string;
+        };
+        ReminderResult: {
+            /** @enum {string} */
+            status?: "sent" | "queued";
+            /** Format: date-time */
+            dueAt?: string;
         };
     };
     responses: {

@@ -36,7 +36,11 @@ Meta limits to verify in M8 against current docs (design to these conservative v
 | `invoice.not_vat` | Merchant not registered | "{merchant} is not registered for VAT, so they cannot issue a tax invoice. Your slip is your receipt." | none |
 | `invoice.tip_only` | Last payment was a quick tip | "That payment was a tip, which has no VAT, so there is no tax invoice for it." | none |
 | `invoice.unavailable` | Registered but no address on file | "{merchant} has not finished setting up tax invoices. Please ask them directly." | none |
-| `stop.ok` | STOP | "Done. You will not get reminders from us." | none |
+| `stop.ok` | STOP | "Done. {merchant} will not send you reminders. Reply STOP ALL to stop reminders from every business." (the business that last wrote to them; with none known, as STOP ALL) | none |
+| `stop.ok` (all) | STOP ALL | "Done. You will not get reminders from us." | none |
+| `share.number.ask` | Walk-up bill left unpaid, inside 24 h | "Your bill of R{amount} at {merchant} is still open. May {merchant} see your number to contact you about it? We do not share it otherwise." | Share my number / No thanks |
+| `share.number.done` | Answer | "Thanks. {merchant} can see your number for this bill." or "OK. Your number stays private." | none |
+| `bill.settled_other` | Merchant marks paid another way while the customer is mid-payment | "{merchant} marked this bill as paid. There is nothing more to pay." | none |
 | `fallback` | Unknown | "I did not understand. Tap the tag again or choose an option." | Menu |
 | `refund.notice` | Refund | "R{amount} was refunded by {merchant}. It can take a few days to show." | none |
 
@@ -47,6 +51,8 @@ Meta limits to verify in M8 against current docs (design to these conservative v
 | `reminder_1` | "Hi, your bill of R{amount} at {merchant} is still open. Pay in seconds: {url}" | 10 minutes after claim or tap |
 | `reminder_2` | "Reminder: R{amount} is waiting at {merchant}. Pay here: {url}. Reply STOP to opt out." | Next day 09:00 SAST |
 | `reminder_3` | "Last reminder for R{amount} at {merchant}: {url}. Reply STOP to opt out." | +3 days 09:00 SAST |
+
+Parameters as sent: amount (formatted, "R500,00"), merchant, bill link (`/b/<token>`, still payable after the bill's usual expiry). The last reminder a merchant allows always uses `reminder_3` ("Last reminder"). The pay link message adds "If it stays unpaid we may remind you. Reply STOP to opt out." when the merchant sends reminders.
 
 Rules: max 3, max 1 per day, 08:00 to 20:00 SAST only, cancelled the moment the bill is paid, cancelled, expired or the customer opts out. Inside the 24 hour window reminders may be plain session messages with buttons.
 

@@ -8,6 +8,7 @@ import {
   canSession,
   canShare,
   cents,
+  ACTIVE_SESSION_STATES,
   decideTap,
   equalShares,
   hashToken,
@@ -26,6 +27,7 @@ import {
   type Cents,
   type Clock,
   type PaymentProvider,
+  type BillState,
   type SessionState,
   type TapDecision,
   type VerifiedEvent,
@@ -55,7 +57,6 @@ import {
   lockPaymentByProviderRef,
   logMessage,
   openBillByCode,
-  optOutGlobally,
   pendingPaymentForSession,
   receiptByPayment,
   recentlyPaidOnTag,
@@ -74,12 +75,14 @@ import {
 import { isValidTagCode, waMeLink } from "@tappay/tag";
 import { TaxInvoices } from "./invoices.js";
 import { postPayment, staffShares, type Money } from "./money.js";
+import { optedOut, Reminders } from "./reminders.js";
 import type { FlowEvents } from "./notifier.js";
 import {
   catalogue,
   IDS,
   parseBillId,
   parseQuickTipId,
+  parseShareConsent,
   parseShareId,
   parseTipId,
   type InboundMessage,
@@ -156,8 +159,10 @@ export interface NewBillInput {
 
 export class PayFlow {
   readonly invoices: TaxInvoices;
+  readonly reminders: Reminders;
   constructor(private readonly d: FlowDeps) {
     this.invoices = new TaxInvoices({ db: d.db, config: d.config, clock: d.clock });
+    this.reminders = new Reminders({ db: d.db, wa: d.wa, crypto: d.crypto, config: d.config, clock: d.clock, log: d.log, ...(d.events ? { events: d.events } : {}) });
   }
 
   /** The tax invoice PDF behind /i/:token. */
@@ -217,7 +222,10 @@ export class PayFlow {
   async billLinkRedirect(billToken: string): Promise<string | null> {
     if (!/^[A-Za-z0-9_-]{20,64}$/.test(billToken)) return null;
     const bill = await billByToken(this.d.db, billToken);
-    if (!bill || (bill.status !== "open" && bill.status !== "claimed") || bill.expires_at <= this.now()) return null;
+    if (!bill) return null;
+    // An unpaid bill stays payable from its link (the reminders send it) after the usual expiry.
+    const unpaid = bill.status === "abandoned" || bill.status === "needs_follow_up";
+    if (!unpaid && ((bill.status !== "open" && bill.status !== "claimed") || bill.expires_at <= this.now())) return null;
     return this.mintRedirect({ tagId: bill.tag_id, billId: bill.id, merchantId: bill.merchant_id });
   }
 
@@ -255,10 +263,24 @@ export class PayFlow {
         const r = await this.invoices.request(customerId);
         return reply(r.msg, r.merchantId);
       }
-      if (word === "STOP" || word === "STOP ALL") {
-        await optOutGlobally(db, customerId, this.now());
-        await audit(db, { merchantId: null, actorKind: "customer", actorId: customerId, action: "customer.opt_out", entity: "customer", entityId: customerId });
+      // STOP ends reminders from the business that last wrote to them; STOP ALL from everyone
+      // (SPEC 11.3). With no business known, STOP means all.
+      if (word === "STOP ALL") {
+        await this.reminders.optOut(customerId, null);
         return reply(catalogue.stopOk());
+      }
+      if (word === "STOP") {
+        const last = await db
+          .selectFrom("message_log")
+          .innerJoin("merchants", "merchants.id", "message_log.merchant_id")
+          .select(["merchants.id", "merchants.name"])
+          .where("message_log.customer_id", "=", customerId)
+          .where("message_log.direction", "=", "out")
+          .orderBy("message_log.id", "desc")
+          .limit(1)
+          .executeTakeFirst();
+        await this.reminders.optOut(customerId, last?.id ?? null);
+        return reply(catalogue.stopOk({ merchant: last?.name ?? null }), last?.id ?? null);
       }
       // A 4-digit bill code, when we just asked for one.
       const code = parseBillCode(m.text);
@@ -281,6 +303,8 @@ export class PayFlow {
 
     // Choosing a bill or a share happens before any session exists.
     if (m.kind === "reply") {
+      const consent = parseShareConsent(m.replyId);
+      if (consent) return this.onShareConsent(m.from, customerId, consent.billId, consent.shared);
       const billId = parseBillId(m.replyId);
       if (billId) return this.onChooseBill(m.from, customerId, billId);
       const shareId = parseShareId(m.replyId);
@@ -306,10 +330,129 @@ export class PayFlow {
     const s = await latestActiveSession(db, customerId);
     if (!s) return null;
     if (s.expiresAt.getTime() > this.now().getTime()) return s;
-    if (canSession(s.status, "expire")) await transitionSession(db, s.id, s.status, "expire");
-    await this.releaseHold(s, customerId);
+    const closed = await this.closeSession(s.id);
     await this.send(to, customerId, s.merchantId, catalogue.sessionExpired());
+    if (closed.consent) await this.send(to, customerId, s.merchantId, closed.consent);
     return "expired";
+  }
+
+  /**
+   * Close a session whose time ran out (the expiry sweep, or the customer's next message).
+   * What it held is released, unless the customer owes it (SPEC 11.1): a bill addressed to
+   * them, or one they got as far as paying for. That bill becomes `abandoned` and reminders
+   * are planned. A walk-up customer is asked whether the merchant may see their number.
+   */
+  async closeSession(sessionId: string): Promise<{ outcome: "released" | "abandoned" | "none"; consent: OutMessage | null }> {
+    const { db, config } = this.d;
+    const now = this.now();
+    const r = await db.transaction().execute(async (trx) => {
+      const s = await trx
+        .selectFrom("sessions")
+        .select(["id", "status", "merchant_id", "bill_id", "bill_share_id", "customer_id", "expires_at", "wa_window_expires_at"])
+        .where("id", "=", sessionId)
+        .where("closed_at", "is", null)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!s) return null;
+      await trx.updateTable("sessions").set({ closed_at: now }).where("id", "=", s.id).execute();
+      const wasPaying = s.status === "awaiting_payment" || s.status === "failed";
+      if (canSession(s.status, "expire")) await transitionSession(trx, s.id, s.status, "expire");
+      const base = { merchantId: s.merchant_id, billId: s.bill_id, customerId: s.customer_id };
+      if (s.bill_share_id) {
+        const share = await getShare(trx, s.bill_share_id);
+        if (share?.status === "claimed" && share.customer_id === s.customer_id) {
+          await transitionShare(trx, share.id, "claimed", "release", { customer_id: null, claimed_at: null });
+          return { ...base, outcome: "released" as const, consent: null };
+        }
+        return { ...base, outcome: "none" as const, consent: null };
+      }
+      if (!s.bill_id) return { ...base, outcome: "none" as const, consent: null };
+      const bill = await trx
+        .selectFrom("bills")
+        .innerJoin("merchants", "merchants.id", "bills.merchant_id")
+        .select(["bills.id", "bills.status", "bills.type", "bills.customer_id", "bills.subtotal_cents", "bills.intended_msisdn_hash", "bills.share_number_consent", "merchants.name"])
+        .where("bills.id", "=", s.bill_id)
+        .forUpdate("bills")
+        .executeTakeFirst();
+      if (!bill || bill.status !== "claimed" || bill.customer_id !== s.customer_id) return { ...base, outcome: "none" as const, consent: null };
+      // A newer live session on the same bill (Try again) keeps it.
+      const newer = await trx
+        .selectFrom("sessions")
+        .select("id")
+        .where("bill_id", "=", bill.id)
+        .where("id", "<>", s.id)
+        .where("closed_at", "is", null)
+        .where("status", "in", ACTIVE_SESSION_STATES)
+        .where("expires_at", ">", now)
+        .executeTakeFirst();
+      if (newer) return { ...base, outcome: "none" as const, consent: null };
+
+      const owes = bill.type !== "quick_tip" && bill.subtotal_cents > 0 && (bill.intended_msisdn_hash !== null || wasPaying);
+      if (!owes) {
+        await transitionBill(trx, bill.id, "claimed", "release", { customer_id: null, claimed_at: null });
+        return { ...base, outcome: "released" as const, consent: null };
+      }
+      // When they left: the expiry, or the failed payment (its session got one more TTL to retry).
+      const abandonedAt = s.status === "failed" ? new Date(s.expires_at.getTime() - config.SESSION_TTL_MINUTES * MINUTE) : s.expires_at;
+      await transitionBill(trx, bill.id, "claimed", "abandon", { abandoned_at: abandonedAt });
+      await audit(trx, { merchantId: s.merchant_id, actorKind: "system", actorId: null, action: "bill.abandoned", entity: "bill", entityId: bill.id, detail: { afterPayNow: wasPaying } });
+      await this.reminders.planFirst(trx, { id: bill.id, merchantId: s.merchant_id, customerId: s.customer_id, abandonedAt });
+      // Within the 24-hour window, a walk-up customer may let the merchant see their number.
+      const ask =
+        !bill.intended_msisdn_hash && bill.share_number_consent === null && s.wa_window_expires_at && s.wa_window_expires_at > now && !(await optedOut(trx, s.customer_id, s.merchant_id));
+      return {
+        ...base,
+        outcome: "abandoned" as const,
+        consent: ask ? catalogue.shareNumberAsk({ merchant: bill.name, amount: cents(bill.subtotal_cents), billId: bill.id }) : null,
+      };
+    });
+    if (!r) return { outcome: "none", consent: null };
+    if (r.billId && r.outcome !== "none") await this.billEvent(r.merchantId, r.billId, r.outcome === "abandoned" ? "bill.abandoned" : "bill.released");
+    return { outcome: r.outcome, consent: r.consent };
+  }
+
+  /** The session.expire job: close every session whose time ran out. */
+  async sweepExpiredSessions(limit = 200): Promise<{ closed: number; abandoned: number }> {
+    const { db, crypto } = this.d;
+    const due = await db
+      .selectFrom("sessions")
+      .select(["id", "customer_id", "merchant_id"])
+      .where("closed_at", "is", null)
+      .where("status", "in", [...ACTIVE_SESSION_STATES, "failed"])
+      .where("expires_at", "<=", this.now())
+      .orderBy("expires_at")
+      .limit(limit)
+      .execute();
+    let abandoned = 0;
+    for (const s of due) {
+      try {
+        const r = await this.closeSession(s.id);
+        if (r.outcome === "abandoned") abandoned++;
+        if (r.consent) {
+          const to = await customerMsisdn(db, crypto, s.customer_id);
+          if (to) await this.send(to, s.customer_id, s.merchant_id, r.consent);
+        }
+      } catch (e) {
+        this.d.log.error({ err: (e as Error).message }, "session close failed");
+      }
+    }
+    return { closed: due.length, abandoned };
+  }
+
+  /** "May {merchant} see your number?" answered (SPEC 13). */
+  private async onShareConsent(to: string, customerId: string, billId: string, shared: boolean): Promise<void> {
+    const { db } = this.d;
+    const bill = await db
+      .updateTable("bills")
+      .set({ share_number_consent: shared })
+      .where("id", "=", billId)
+      .where("customer_id", "=", customerId)
+      .returning(["merchant_id"])
+      .executeTakeFirst();
+    if (!bill) return this.send(to, customerId, null, catalogue.fallback());
+    await audit(db, { merchantId: bill.merchant_id, actorKind: "customer", actorId: customerId, action: shared ? "customer.number_shared" : "customer.number_withheld", entity: "bill", entityId: billId });
+    const m = await db.selectFrom("merchants").select("name").where("id", "=", bill.merchant_id).executeTakeFirstOrThrow();
+    return this.send(to, customerId, bill.merchant_id, catalogue.shareNumberDone({ merchant: m.name, shared }));
   }
 
   /** Give back what a session held: its share, or the whole bill. */
@@ -441,6 +584,7 @@ export class PayFlow {
     }
     if (bill.status === "open" && (await listShares(db, bill.id)).length > 0) return this.offerShares(to, customerId, merchantId, bill.id, m.name);
     if (bill.status === "open") return this.claimAndStart(to, customerId, merchantId, m.tips_enabled, bill.id, m.name);
+    if (bill.status === "abandoned" || bill.status === "needs_follow_up") return this.claimAndStart(to, customerId, merchantId, m.tips_enabled, bill.id, m.name, bill.status);
     if (bill.status === "claimed" && bill.customer_id === customerId) {
       return this.startSession(to, customerId, merchantId, m.tips_enabled, { billId: bill.id, base: bill.subtotal_cents });
     }
@@ -448,9 +592,9 @@ export class PayFlow {
     return this.send(to, customerId, merchantId, catalogue.billNone({ merchant: m.name }));
   }
 
-  private async claimAndStart(to: string, customerId: string, merchantId: string, tipsEnabled: boolean, billId: string, merchant: string): Promise<void> {
+  private async claimAndStart(to: string, customerId: string, merchantId: string, tipsEnabled: boolean, billId: string, merchant: string, from: BillState = "open"): Promise<void> {
     const { db } = this.d;
-    const won = await transitionBill(db, billId, "open", "claim", { customer_id: customerId, claimed_at: this.now() });
+    const won = await transitionBill(db, billId, from, "claim", { customer_id: customerId, claimed_at: this.now() });
     if (!won) return this.send(to, customerId, merchantId, catalogue.billClaimedOther({ merchant }));
     await audit(db, { merchantId, actorKind: "customer", actorId: customerId, action: "bill.claimed", entity: "bill", entityId: billId });
     await this.billEvent(merchantId, billId, "bill.claimed");
@@ -802,7 +946,9 @@ export class PayFlow {
     if (!moved) return; // a duplicate Pay now: the first one sends the link
 
     const minutes = Math.max(1, Math.round((checkout.expiresAt.getTime() - this.now().getTime()) / MINUTE));
-    return this.send(to, customerId, s.merchantId, catalogue.payLink({ merchant: s.merchantName, total, url: checkout.url, minutes }));
+    const m = await db.selectFrom("merchants").select("reminder_count").where("id", "=", s.merchantId).executeTakeFirstOrThrow();
+    const remind = m.reminder_count > 0 && s.billType !== "quick_tip" && !(await optedOut(db, customerId, s.merchantId));
+    return this.send(to, customerId, s.merchantId, catalogue.payLink({ merchant: s.merchantName, total, url: checkout.url, minutes, remind }));
   }
 
   // ── Provider events ────────────────────────────────────────────────────────
@@ -850,12 +996,14 @@ export class PayFlow {
             settled = await transitionShare(trx, share.id, share.status, "pay");
             if (settled && bill && (await unpaidShareCount(trx, bill.id)) === 0 && canBill(bill.status, "pay")) {
               await transitionBill(trx, bill.id, bill.status, "pay", { paid_at: now });
+              await this.reminders.cancelForBill(trx, bill.id, "paid");
             }
           }
         } else if (bill && bill.subtotal_cents === p.base && canBill(bill.status, "pay")) {
           // Only settle the bill at the amount it now has: a checkout opened before a merchant
           // edit pays a stale amount (SPEC 5 rule 4) and is flagged below instead.
           settled = await transitionBill(trx, bill.id, bill.status, "pay", { paid_at: now, customer_id: p.customerId });
+          if (settled) await this.reminders.cancelForBill(trx, bill.id, "paid");
         }
         if (!settled) {
           // Money was taken but the bill or share was already settled, closed or re-priced (a
@@ -906,7 +1054,10 @@ export class PayFlow {
       if (!(await settlePayment(trx, p.id, { status: ev.type === "payment.cancelled" ? "cancelled" : "failed", method: null, fee: null }))) {
         return { kind: "duplicate" as const };
       }
-      if (p.sessionStatus === "awaiting_payment") await transitionSession(trx, p.sessionId, "awaiting_payment", "payment_failed");
+      // One more session's time to press Try again before the bill counts as abandoned.
+      if (p.sessionStatus === "awaiting_payment") {
+        await transitionSession(trx, p.sessionId, "awaiting_payment", "payment_failed", { expires_at: new Date(now.getTime() + config.SESSION_TTL_MINUTES * MINUTE) });
+      }
       await flag(trx, p.merchantId, p.id, "payment.failed");
       const bill = p.billId ? await getBill(trx, p.merchantId, p.billId) : undefined;
       return {
@@ -1068,8 +1219,31 @@ export class PayFlow {
       if (canShare(sh.status, "cancel")) await transitionShare(db, sh.id, sh.status, "cancel");
     }
     await transitionBill(db, billId, bill.status, "cancel");
+    await this.reminders.cancelForBill(db, billId, "cancelled");
     await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.cancelled", entity: "bill", entityId: billId });
     await this.billEvent(merchantId, billId, "bill.cancelled");
+  }
+
+  /** Paid in cash or another way (SPEC 11.4): reason required; reminders stop. */
+  async markPaidOther(merchantId: string, billId: string, actorUserId: string | null, reason: string): Promise<void> {
+    await this.settleUnpaid(merchantId, billId, actorUserId, "mark_paid_other", reason);
+  }
+
+  /** The merchant gives up on an unpaid bill (SPEC 11.4). */
+  async writeOff(merchantId: string, billId: string, actorUserId: string | null, reason: string): Promise<void> {
+    await this.settleUnpaid(merchantId, billId, actorUserId, "write_off", reason);
+  }
+
+  private async settleUnpaid(merchantId: string, billId: string, actorUserId: string | null, event: "mark_paid_other" | "write_off", reason: string): Promise<void> {
+    const { db } = this.d;
+    const bill = await getBill(db, merchantId, billId);
+    if (!bill) throw new FlowError("not_found", "bill not found");
+    if (!canBill(bill.status, event)) throw new FlowError("not_allowed", `bill is ${bill.status}`);
+    if (event === "mark_paid_other") await this.cancelSessions(merchantId, billId, catalogue.billSettledOther);
+    if (!(await transitionBill(db, billId, bill.status, event, { closed_reason: reason.slice(0, 200) }))) throw new FlowError("conflict", "the bill changed; try again");
+    await this.reminders.cancelForBill(db, billId, event === "write_off" ? "written_off" : "paid_other");
+    await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: event === "write_off" ? "bill.written_off" : "bill.paid_other", entity: "bill", entityId: billId, detail: { reason } });
+    await this.billEvent(merchantId, billId, event === "write_off" ? "bill.written_off" : "bill.paid_other");
   }
 
   /** Cancel every in-progress session on a bill and tell each customer why. */

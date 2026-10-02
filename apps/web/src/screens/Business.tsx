@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, parseRands, rands, type Business as BusinessT, type Me, type StaffMember } from "../api";
+import { api, ApiError, parseRands, rands, type Business as BusinessT, type Me, type ReminderSettings, type StaffMember } from "../api";
 import { Button, ErrorNote, Field, Screen } from "../ui";
 
 /** SPEC 16 for managers: business and VAT details, services and prices, staff. */
@@ -34,6 +34,7 @@ export function Business({ me, go }: { me: Me; go: (path: string) => void }) {
       )}
       <ErrorNote>{error}</ErrorNote>
       <Details act={act} />
+      <Reminders act={act} />
       <Services act={act} />
       <Staff me={me} act={act} />
     </Screen>
@@ -219,6 +220,56 @@ function Staff({ me, act }: { me: Me; act: Act }) {
           Add staff member
         </Button>
       </form>
+    </section>
+  );
+}
+
+const HOURS = Array.from({ length: 13 }, (_, i) => i + 8);
+
+function Reminders({ act }: { act: Act }) {
+  const [r, setR] = useState<ReminderSettings | null>(null);
+  useEffect(() => {
+    api<ReminderSettings>("/v1/merchant/settings")
+      .then((s) => setR({ reminderCount: s.reminderCount, reminderFirstDelayMinutes: s.reminderFirstDelayMinutes, reminderWindowStart: s.reminderWindowStart, reminderWindowEnd: s.reminderWindowEnd }))
+      .catch(() => undefined);
+  }, []);
+  if (!r) return null;
+  const select = (label: string, name: keyof ReminderSettings, options: { v: number; l: string }[]) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-sm font-medium text-slate-700">{label}</span>
+      <select name={name} className="min-h-12 rounded-xl border border-slate-300 px-3" value={r[name]} onChange={(e) => setR({ ...r, [name]: Number(e.target.value) })}>
+        {options.map((o) => (
+          <option key={o.v} value={o.v}>
+            {o.l}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  return (
+    <section aria-label="Reminders" className="flex flex-col gap-3">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Reminders for unpaid bills</h2>
+      {select("How many", "reminderCount", [0, 1, 2, 3].map((v) => ({ v, l: v === 0 ? "None" : String(v) })))}
+      {r.reminderCount > 0 && (
+        <>
+          {select("First reminder after", "reminderFirstDelayMinutes", [10, 30, 60, 120, 240].map((v) => ({ v, l: v < 60 ? `${v} minutes` : `${v / 60} hour${v === 60 ? "" : "s"}` })))}
+          <div className="grid grid-cols-2 gap-2">
+            {select("Not before", "reminderWindowStart", HOURS.slice(0, -1).map((v) => ({ v, l: `${String(v).padStart(2, "0")}:00` })))}
+            {select("Not after", "reminderWindowEnd", HOURS.slice(1).map((v) => ({ v, l: `${String(v).padStart(2, "0")}:00` })))}
+          </div>
+          <p className="text-xs text-slate-500">At most one a day. Customers can reply STOP at any time.</p>
+        </>
+      )}
+      <Button
+        onClick={() =>
+          void act(async () => {
+            await api("/v1/merchant/settings", { method: "PATCH", body: JSON.stringify(r) });
+            return "Reminder settings saved.";
+          })
+        }
+      >
+        Save reminders
+      </Button>
     </section>
   );
 }

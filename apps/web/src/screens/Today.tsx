@@ -78,6 +78,9 @@ export function Today({ me, go }: { me: Me; go: (path: string) => void }) {
         <Button variant="secondary" onClick={() => go("/reports")}>
           Reports
         </Button>
+        <Button variant="secondary" onClick={() => go("/unpaid")}>
+          Unpaid
+        </Button>
         {(me.user.role === "manager" || me.user.role === "owner") && (
           <>
             <Button variant="secondary" onClick={() => go("/tags")}>

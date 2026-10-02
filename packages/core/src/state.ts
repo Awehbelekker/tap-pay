@@ -74,7 +74,8 @@ export class IllegalTransition extends Error {
 }
 
 const BILL: Record<BillEvent, Partial<Record<BillState, BillState>>> = {
-  claim: { open: "claimed" },
+  // An unpaid bill is claimed again when its customer opens a reminder's link (SPEC 11).
+  claim: { open: "claimed", abandoned: "claimed", needs_follow_up: "claimed" },
   // Merchant release, or a claim left idle past SESSION_TTL.
   release: { claimed: "open" },
   pay: { open: "paid", claimed: "paid", abandoned: "paid", needs_follow_up: "paid" },

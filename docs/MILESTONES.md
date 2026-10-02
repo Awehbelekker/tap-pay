@@ -30,7 +30,7 @@ Accept: ledger sums to payment amount for every scenario (property test); ledger
 Manager dashboard, CSV export, receipt page with print animation and sound toggle, tax invoice PDF for VAT-registered merchants, end-of-day summary.
 Accept: totals reconcile with ledger; receipt token unguessable and revocable.
 
-## M7 Unpaid bills and reminders
+## M7 Unpaid bills and reminders (done 2026-10-02)
 Open tab with intended-customer capture, abandoned detection, reminder schedule, STOP handling, merchant follow-up list, write-off, mark paid other.
 Accept: time-travel tests via `Clock`: never more than 3, never more than 1 per day, never outside 08:00 to 20:00 SAST, none after paid or STOP.
 

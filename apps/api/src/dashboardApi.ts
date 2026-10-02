@@ -85,15 +85,15 @@ export function registerDashboardApi(app: FastifyInstance, d: DashboardApiDeps):
   // ── Services and prices ─────────────────────────────────────────────────────
 
   app.get("/v1/merchant/services/all", { preHandler: manager }, async (req) => {
-    const rows = await db.selectFrom("services").select(["id", "name", "price_cents", "active"]).where("merchant_id", "=", me(req).merchantId).orderBy("active", "desc").orderBy("name").execute();
-    return { items: rows.map((r) => ({ id: r.id, name: r.name, priceCents: r.price_cents, active: r.active })) };
+    const rows = await db.selectFrom("services").select(["id", "name", "price_cents", "active", "reminders_enabled"]).where("merchant_id", "=", me(req).merchantId).orderBy("active", "desc").orderBy("name").execute();
+    return { items: rows.map((r) => ({ id: r.id, name: r.name, priceCents: r.price_cents, active: r.active, remindersEnabled: r.reminders_enabled })) };
   });
 
-  const service = z.object({ name: z.string().trim().min(1).max(60), priceCents: z.number().int().min(0).max(100_000_000), active: z.boolean() });
+  const service = z.object({ name: z.string().trim().min(1).max(60), priceCents: z.number().int().min(0).max(100_000_000), active: z.boolean(), remindersEnabled: z.boolean() });
 
   app.post("/v1/merchant/services", { preHandler: manager }, async (req, reply) => {
     const s = me(req);
-    const b = service.omit({ active: true }).strict().safeParse(req.body);
+    const b = service.omit({ active: true, remindersEnabled: true }).strict().safeParse(req.body);
     if (!b.success) return bad(reply, b.error);
     const r = await db.insertInto("services").values({ merchant_id: s.merchantId, name: b.data.name, price_cents: b.data.priceCents }).returning("id").executeTakeFirstOrThrow();
     await audit(db, { merchantId: s.merchantId, actorKind: "user", actorId: s.userId, action: "service.created", entity: "service", entityId: r.id, detail: b.data });
@@ -109,7 +109,12 @@ export function registerDashboardApi(app: FastifyInstance, d: DashboardApiDeps):
     if (Object.keys(b.data).length === 0) return reply.code(422).send({ code: "empty", message: "nothing to change" });
     const r = await db
       .updateTable("services")
-      .set({ ...(b.data.name !== undefined && { name: b.data.name }), ...(b.data.priceCents !== undefined && { price_cents: b.data.priceCents }), ...(b.data.active !== undefined && { active: b.data.active }) })
+      .set({
+        ...(b.data.name !== undefined && { name: b.data.name }),
+        ...(b.data.priceCents !== undefined && { price_cents: b.data.priceCents }),
+        ...(b.data.active !== undefined && { active: b.data.active }),
+        ...(b.data.remindersEnabled !== undefined && { reminders_enabled: b.data.remindersEnabled }),
+      })
       .where("merchant_id", "=", s.merchantId)
       .where("id", "=", req.params.id)
       .executeTakeFirst();

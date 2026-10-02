@@ -28,6 +28,8 @@ export const IDS = {
   quickTipOther: "qt_other",
   bill: (id: string) => `bill_${id}`,
   share: (id: string) => `share_${id}`,
+  shareYes: (billId: string) => `share_yes:${billId}`,
+  shareNo: (billId: string) => `share_no:${billId}`,
 } as const;
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -37,6 +39,11 @@ export function parseBillId(id: string): string | null {
 export function parseShareId(id: string): string | null {
   return new RegExp(`^share_(${UUID})$`).exec(id)?.[1] ?? null;
 }
+export function parseShareConsent(id: string): { billId: string; shared: boolean } | null {
+  const m = /^share_(yes|no):([0-9a-f-]{36})$/.exec(id);
+  return m ? { billId: m[2]!, shared: m[1] === "yes" } : null;
+}
+
 export function parseQuickTipId(id: string): number | "other" | null {
   if (id === IDS.quickTipOther) return "other";
   const m = /^qt_(\d{1,9})$/.exec(id);
@@ -103,11 +110,12 @@ export const catalogue = {
     };
   },
 
-  payLink(i: { merchant: string; total: Cents; url: string; minutes: number }): OutMessage {
+  /** `remind`: the merchant sends reminders, so say so once, with how to stop (SPEC 11.3). */
+  payLink(i: { merchant: string; total: Cents; url: string; minutes: number; remind?: boolean }): OutMessage {
     // Raw URL: WhatsApp does not render markdown links.
     return {
       kind: "text",
-      body: `Pay ${R(i.total)} to ${i.merchant} with Apple Pay, Google Pay or your bank:\n${i.url}\nThe link works for ${i.minutes} minutes.`,
+      body: `Pay ${R(i.total)} to ${i.merchant} with Apple Pay, Google Pay or your bank:\n${i.url}\nThe link works for ${i.minutes} minutes.${i.remind ? "\nIf it stays unpaid we may remind you. Reply STOP to opt out." : ""}`,
     };
   },
 
@@ -249,8 +257,31 @@ export const catalogue = {
     return { kind: "text", body: `${R(i.amount)} was refunded by ${i.merchant}. It can take a few days to show.` };
   },
 
-  stopOk(): OutMessage {
-    return { kind: "text", body: "Done. You will not get reminders from us." };
+  /** STOP: reminders from that business end; STOP ALL (or no business known) ends them all. */
+  stopOk(i: { merchant?: string | null } = {}): OutMessage {
+    return i.merchant
+      ? { kind: "text", body: `Done. ${i.merchant} will not send you reminders. Reply STOP ALL to stop reminders from every business.` }
+      : { kind: "text", body: "Done. You will not get reminders from us." };
+  },
+
+  /** After a bill is left unpaid (SPEC 13): may the merchant see the full number? */
+  shareNumberAsk(i: { merchant: string; amount: Cents; billId: string }): OutMessage {
+    return {
+      kind: "buttons",
+      body: `Your bill of ${R(i.amount)} at ${i.merchant} is still open. May ${i.merchant} see your number to contact you about it? We do not share it otherwise.`,
+      buttons: [
+        { id: IDS.shareYes(i.billId), title: "Share my number" },
+        { id: IDS.shareNo(i.billId), title: "No thanks" },
+      ],
+    };
+  },
+
+  billSettledOther(i: { merchant: string }): OutMessage {
+    return { kind: "text", body: `${i.merchant} marked this bill as paid. There is nothing more to pay.` };
+  },
+
+  shareNumberDone(i: { merchant: string; shared: boolean }): OutMessage {
+    return { kind: "text", body: i.shared ? `Thanks. ${i.merchant} can see your number for this bill.` : "OK. Your number stays private." };
   },
 
   fallback(): OutMessage {

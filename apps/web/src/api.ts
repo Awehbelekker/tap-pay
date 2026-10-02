@@ -307,3 +307,25 @@ export interface Business {
   vatNumber: string | null;
   address: string | null;
 }
+
+export interface UnpaidBill {
+  id: string;
+  status: "abandoned" | "needs_follow_up";
+  description: string;
+  amountCents: number;
+  abandonedAt: string;
+  staffName: string | null;
+  customer: { name: string | null; maskedNumber: string | null; number: string | null };
+  remindersSent: number;
+  reminderLimit: number;
+  nextReminderAt: string | null;
+  optedOut: boolean;
+  link: string;
+}
+
+export interface ReminderSettings {
+  reminderCount: number;
+  reminderFirstDelayMinutes: number;
+  reminderWindowStart: number;
+  reminderWindowEnd: number;
+}

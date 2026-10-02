@@ -183,6 +183,14 @@ After reminder 3 the bill becomes `needs_follow_up` in the merchant's Unpaid tab
 
 Settings: reminders 0–3, timing, quiet hours. Unpaid tab: status (abandoned, failed, needs_follow_up), age, reminders sent, buttons Send reminder, Resend link, Mark paid another way (reason required), Write off. Opted-out customers are flagged so the merchant follows up in person.
 
+### 11.5 As built (M7)
+
+- **Who owes a bill.** When a session runs out (the `session.expire` job, every minute, or the customer's next message), a bill addressed to the customer's number, or one the customer got as far as paying for (Pay now pressed, or payment failed), becomes `abandoned` with `abandoned_at`. A walk-up customer who only looked releases it back to the tag. Quick tips are never abandoned. After a failed payment the customer gets one more session's time to press Try again.
+- **Reminders** are planned one row at a time in `reminders` and sent by the `reminder.send` job (every minute) as templates `reminder_1/2/3` with a bill link that stays payable. Timing is the pure `decideReminder` in packages/core (property tests: at most the merchant's count and never more than 3, one per SAST day, only inside the merchant's window within 08:00 to 20:00). A reminder is marked sent before it goes, so a crash can lose one but never send two. While the customer is paying (bill claimed) the reminder waits.
+- **Stops**: paid (any route, including a late provider success), cancelled, marked paid another way, written off, STOP, STOP ALL, service with reminders off, merchant set 0. After the last one the bill becomes `needs_follow_up`.
+- **Merchant**: Unpaid list (PWA) with reminders sent and next, opt-out flag, Send reminder (same rules, counts toward the cap; queued if outside the window or one was sent today), Resend link (share sheet), Paid another way (reason), Write off (managers, reason). Settings: how many (0 to 3), first after (minutes), not before / not after (hours within 08 to 20).
+- **Consent**: a walk-up customer who left a bill unpaid is asked once (inside the 24-hour window) whether the merchant may see their number; the answer is stored on the bill.
+
 ## 12. Notifications
 
 Notify only after provider-confirmed payment, never on Pay now.

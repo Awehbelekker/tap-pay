@@ -220,7 +220,7 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
   app.get("/v1/merchant/settings", { preHandler: staff }, async (req) => {
     const m = await db
       .selectFrom("merchants")
-      .select(["tips_enabled", "tip_presets", "tip_min_cents", "tip_max_bp", "tip_max_cents", "tip_rule", "tip_house_cut_bp", "fee_policy", "payout_threshold_cents", "notify_managers", "quick_tip_presets_cents"])
+      .select(["tips_enabled", "tip_presets", "tip_min_cents", "tip_max_bp", "tip_max_cents", "tip_rule", "tip_house_cut_bp", "fee_policy", "payout_threshold_cents", "notify_managers", "quick_tip_presets_cents", "reminder_count", "reminder_first_delay_minutes", "reminder_window_start", "reminder_window_end"])
       .where("id", "=", me(req).merchantId)
       .executeTakeFirstOrThrow();
     return {
@@ -235,6 +235,10 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
       payoutThresholdCents: m.payout_threshold_cents,
       notifyManagers: m.notify_managers,
       quickTipPresetsCents: m.quick_tip_presets_cents,
+      reminderCount: m.reminder_count,
+      reminderFirstDelayMinutes: m.reminder_first_delay_minutes,
+      reminderWindowStart: m.reminder_window_start,
+      reminderWindowEnd: m.reminder_window_end,
     };
   });
 
@@ -253,12 +257,22 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
         payoutThresholdCents: z.number().int().min(0).max(10_000_000),
         notifyManagers: z.enum(["each_payment", "daily_summary", "off"]),
         quickTipPresetsCents: z.array(z.number().int().positive()).min(1).max(9),
+        reminderCount: z.number().int().min(0).max(3),
+        reminderFirstDelayMinutes: z.number().int().min(1).max(1440),
+        reminderWindowStart: z.number().int().min(8).max(19),
+        reminderWindowEnd: z.number().int().min(9).max(20),
       })
       .partial()
       .strict()
       .safeParse(req.body);
     if (!b.success) return bad(reply, b.error);
     const v = b.data;
+    if (v.reminderWindowStart !== undefined || v.reminderWindowEnd !== undefined) {
+      const cur = await db.selectFrom("merchants").select(["reminder_window_start", "reminder_window_end"]).where("id", "=", s.merchantId).executeTakeFirstOrThrow();
+      if ((v.reminderWindowStart ?? cur.reminder_window_start) >= (v.reminderWindowEnd ?? cur.reminder_window_end)) {
+        return reply.code(422).send({ code: "bad_window", message: "reminders start before they end, between 08:00 and 20:00" });
+      }
+    }
     const set = {
       ...(v.tipsEnabled !== undefined && { tips_enabled: v.tipsEnabled }),
       ...(v.tipPresets !== undefined && { tip_presets: v.tipPresets }),
@@ -271,6 +285,10 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
       ...(v.payoutThresholdCents !== undefined && { payout_threshold_cents: v.payoutThresholdCents }),
       ...(v.notifyManagers !== undefined && { notify_managers: v.notifyManagers }),
       ...(v.quickTipPresetsCents !== undefined && { quick_tip_presets_cents: v.quickTipPresetsCents }),
+      ...(v.reminderCount !== undefined && { reminder_count: v.reminderCount }),
+      ...(v.reminderFirstDelayMinutes !== undefined && { reminder_first_delay_minutes: v.reminderFirstDelayMinutes }),
+      ...(v.reminderWindowStart !== undefined && { reminder_window_start: v.reminderWindowStart }),
+      ...(v.reminderWindowEnd !== undefined && { reminder_window_end: v.reminderWindowEnd }),
     };
     if (Object.keys(set).length === 0) return reply.code(422).send({ code: "empty", message: "nothing to change" });
     await db.updateTable("merchants").set(set).where("id", "=", s.merchantId).execute();

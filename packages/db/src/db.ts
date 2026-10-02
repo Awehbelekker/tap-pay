@@ -50,6 +50,10 @@ export interface MerchantsTable {
   platform_fee_cents: Generated<number>;
   address: Generated<string | null>;
   invoice_seq: Generated<number>;
+  reminder_count: Generated<number>;
+  reminder_first_delay_minutes: Generated<number>;
+  reminder_window_start: Generated<number>;
+  reminder_window_end: Generated<number>;
   created_at: Generated<Date>;
 }
 
@@ -89,6 +93,7 @@ export interface ServicesTable {
   name: string;
   price_cents: number;
   active: Generated<boolean>;
+  reminders_enabled: Generated<boolean>;
 }
 
 export interface CustomersTable {
@@ -131,6 +136,9 @@ export interface BillsTable {
   shift_id: string | null;
   version: Generated<number>;
   created_at: Generated<Date>;
+  abandoned_at: Generated<Date | null>;
+  closed_reason: Generated<string | null>;
+  share_number_consent: Generated<boolean | null>;
 }
 
 export interface BillSharesTable {
@@ -179,6 +187,7 @@ export interface SessionsTable {
   expires_at: Date;
   version: Generated<number>;
   created_at: Generated<Date>;
+  closed_at: Generated<Date | null>;
 }
 
 export interface PaymentsTable {
@@ -399,6 +408,27 @@ export interface TaxInvoicesTable {
   issued_at: Date | null;
 }
 
+export interface RemindersTable {
+  id: Generated<string>;
+  bill_id: string;
+  customer_id: string;
+  merchant_id: string | null;
+  seq: number;
+  due_at: Date;
+  sent_at: Date | null;
+  status: Generated<"scheduled" | "sent" | "failed" | "skipped" | "cancelled">;
+  template: string | null;
+  error: string | null;
+  created_at: Generated<Date>;
+}
+
+export interface OptOutsTable {
+  id: Generated<string>;
+  customer_id: string;
+  merchant_id: string | null;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
   split_rules: SplitRulesTable;
   shifts: ShiftsTable;
@@ -425,6 +455,8 @@ export interface Database {
   ledger_entries: LedgerEntriesTable;
   receipts: ReceiptsTable;
   tax_invoices: TaxInvoicesTable;
+  reminders: RemindersTable;
+  opt_outs: OptOutsTable;
   webhook_events: WebhookEventsTable;
   message_log: MessageLogTable;
   audit_log: AuditLogTable;

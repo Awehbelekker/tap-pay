@@ -147,6 +147,30 @@ components:
         payoutThresholdCents: {type: integer, minimum: 0}
         notifyManagers: {type: string, enum: [each_payment, daily_summary, off]}
         quickTipPresetsCents: {type: array, items: {type: integer}}
+        reminderCount: {type: integer, minimum: 0, maximum: 3}
+        reminderFirstDelayMinutes: {type: integer, minimum: 1, maximum: 1440}
+        reminderWindowStart: {type: integer, minimum: 8, maximum: 19, description: SAST hour}
+        reminderWindowEnd: {type: integer, minimum: 9, maximum: 20, description: SAST hour (exclusive)}
+    UnpaidBill:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [abandoned, needs_follow_up]}
+        description: {type: string}
+        amountCents: {type: integer}
+        abandonedAt: {type: string, format: date-time}
+        staffName: {type: [string, 'null']}
+        customer: {type: object, properties: {name: {type: [string, 'null']}, maskedNumber: {type: [string, 'null']}, number: {type: [string, 'null']}}}
+        remindersSent: {type: integer}
+        reminderLimit: {type: integer}
+        nextReminderAt: {type: [string, 'null'], format: date-time}
+        optedOut: {type: boolean}
+        link: {type: string}
+    ReminderResult:
+      type: object
+      properties:
+        status: {type: string, enum: [sent, queued]}
+        dueAt: {type: string, format: date-time}
   parameters:
     IdemKey: {name: Idempotency-Key, in: header, required: false, schema: {type: string}}
   responses:
@@ -262,9 +286,10 @@ paths:
     patch: {tags: [merchant], security: [{bearer: []}], summary: Edit lines while open (version check), parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: updated}, '409': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/bills/{id}/cancel: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: cancelled}}}}
   /v1/merchant/bills/{id}/release: {post: {tags: [merchant], security: [{bearer: []}], summary: Release a wrongly claimed bill, parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: released}}}}
-  /v1/merchant/bills/{id}/remind: {post: {tags: [merchant], security: [{bearer: []}], summary: Send manual reminder (counts toward cap), parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'202': {description: queued}, '429': {$ref: '#/components/responses/Err'}}}}
-  /v1/merchant/bills/{id}/mark-paid-other: {post: {tags: [merchant], security: [{bearer: []}], summary: Paid by cash or other method, parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}}}}
-  /v1/merchant/bills/{id}/write-off: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}}}}
+  /v1/merchant/unpaid: {get: {tags: [merchant], security: [{bearer: []}], summary: Bills left unpaid (abandoned or needing follow-up). Staff see their own. The full number only when typed by the merchant or shared by the customer., responses: {'200': {description: list, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/UnpaidBill'}}}}}}}}}}
+  /v1/merchant/bills/{id}/remind: {post: {tags: [merchant], security: [{bearer: []}], summary: Send a reminder now if the rules allow (08:00 to 20:00 SAST, one a day), else queue it. Counts toward the cap., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: sent, content: {application/json: {schema: {$ref: '#/components/schemas/ReminderResult'}}}}, '202': {description: queued, content: {application/json: {schema: {$ref: '#/components/schemas/ReminderResult'}}}}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/bills/{id}/mark-paid-other: {post: {tags: [merchant], security: [{bearer: []}], summary: Paid by cash or another way (reason required). Reminders stop., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, minLength: 3, maxLength: 200}}}}}}, responses: {'200': {description: ok}, '409': {$ref: '#/components/responses/Err'}, '422': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/bills/{id}/write-off: {post: {tags: [merchant], security: [{bearer: []}], summary: Write off an unpaid bill (manager, reason required). Reminders stop., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, minLength: 3, maxLength: 200}}}}}}, responses: {'200': {description: ok}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '422': {$ref: '#/components/responses/Err'}}}}
   /v1/merchant/events:
     get: {tags: [merchant], security: [{bearer: []}], summary: 'Server-sent events: bill.created, bill.claimed, share.claimed, bill.updated, bill.released, bill.cancelled, bill.paid, bill.failed. Resume with Last-Event-ID. EventSource may pass ?access_token=. Heartbeat every 25 s.', responses: {'200': {description: text/event-stream, content: {text/event-stream: {schema: {type: string}}}}}}
   /v1/merchant/services:
@@ -316,7 +341,7 @@ paths:
     patch: {tags: [merchant], security: [{bearer: []}], summary: Change business details. VAT registration needs a VAT number (10 digits, starts with 4) and an address., requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Business'}}}}, responses: {'200': {description: saved}, '422': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/services/all: {get: {tags: [merchant], security: [{bearer: []}], summary: All services including hidden ones (manager), responses: {'200': {description: list}}}}
   /v1/merchant/services/{id}:
-    patch: {tags: [merchant], security: [{bearer: []}], summary: Rename, reprice or hide a service (manager). Existing bills keep their price., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {name: {type: string}, priceCents: {type: integer, minimum: 0}, active: {type: boolean}}}}}}, responses: {'200': {description: saved}, '404': {$ref: '#/components/responses/Err'}}}
+    patch: {tags: [merchant], security: [{bearer: []}], summary: Rename, reprice or hide a service (manager). Existing bills keep their price., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {name: {type: string}, priceCents: {type: integer, minimum: 0}, active: {type: boolean}, remindersEnabled: {type: boolean}}}}}}, responses: {'200': {description: saved}, '404': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/staff/{id}:
     patch: {tags: [merchant], security: [{bearer: []}], summary: Rename, change role or deactivate (manager; owners only by an owner; not yourself), parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {name: {type: string}, role: {type: string, enum: [staff, manager, owner]}, active: {type: boolean}}}}}}, responses: {'200': {description: saved}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/payments/{id}/receipt:

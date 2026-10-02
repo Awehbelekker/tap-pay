@@ -326,8 +326,11 @@ describe.skipIf(!url)("tap to slip (e2e)", () => {
     const ref = await payThroughToLink(customer, "tip_none");
     clock.advance(11 * 60_000);
     await text(customer, "hello");
-    expect(body(last(customer))).toContain("expired");
-    expect((await h.db.selectFrom("bills").select("status").where("id", "=", bill.id).executeTakeFirstOrThrow()).status).toBe("open");
+    const msgs = wa.messagesTo(customer);
+    expect(body(msgs.at(-2)!)).toContain("expired");
+    // They got as far as paying, so the bill is theirs to pay (M7): abandoned, not reopened.
+    expect(body(msgs.at(-1)!)).toContain("May Demo Surf School see your number");
+    expect((await h.db.selectFrom("bills").select("status").where("id", "=", bill.id).executeTakeFirstOrThrow()).status).toBe("abandoned");
     await app.inject({ method: "POST", url: `/mock-checkout/${ref}`, payload: { outcome: "succeeded" } });
     expect((await counts(ref)).pay.status).toBe("succeeded");
     expect((await h.db.selectFrom("bills").select("status").where("id", "=", bill.id).executeTakeFirstOrThrow()).status).toBe("paid");

@@ -2,6 +2,7 @@ import { loadConfig } from "@tappay/config";
 import { createDb } from "@tappay/db";
 import { createQueue } from "@tappay/db/queue";
 import { buildApp } from "./app.js";
+import type { PayFlow } from "./flow.js";
 import type { Money } from "./money.js";
 import type { Reports } from "./reports.js";
 
@@ -16,6 +17,16 @@ const app = buildApp({ config, db, queue });
 await queue.boss.work("payout.run", async () => {
   const r = await (app as unknown as { money: Money }).money.runAllPayouts();
   app.log.info(r, "payout run");
+});
+const flow = (app as unknown as { payFlow: PayFlow }).payFlow;
+// Every minute (apps/worker schedules): close expired sessions, then send due reminders.
+await queue.boss.work("session.expire", async () => {
+  const r = await flow.sweepExpiredSessions();
+  if (r.closed) app.log.info(r, "sessions closed");
+});
+await queue.boss.work("reminder.send", async () => {
+  const r = await flow.reminders.runDue();
+  if (r.sent || r.deferred || r.cancelled) app.log.info(r, "reminders");
 });
 await queue.boss.work("summary.daily", async () => {
   const r = await (app as unknown as { reports: Reports }).reports.sendDailySummaries();

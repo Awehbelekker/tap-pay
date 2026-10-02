@@ -20,6 +20,7 @@ export type QueueName = (typeof QUEUES)[number];
 
 export const SCHEDULES: { name: QueueName; cron: string }[] = [
   { name: "session.expire", cron: "* * * * *" },
+  { name: "reminder.send", cron: "* * * * *" },
   { name: "bill.expire", cron: "*/15 * * * *" },
   { name: "payout.run", cron: "0 6 * * *" },
   { name: "reconcile.payments", cron: "*/15 * * * *" },

@@ -24,8 +24,8 @@ const BILL_EXPECT: Record<BillState, Partial<Record<BillEvent, BillState>>> = {
   paid: {},
   cancelled: {},
   expired: {},
-  abandoned: { pay: "paid", cancel: "cancelled", follow_up: "needs_follow_up", mark_paid_other: "paid_other", write_off: "written_off" },
-  needs_follow_up: { pay: "paid", cancel: "cancelled", mark_paid_other: "paid_other", write_off: "written_off" },
+  abandoned: { claim: "claimed", pay: "paid", cancel: "cancelled", follow_up: "needs_follow_up", mark_paid_other: "paid_other", write_off: "written_off" },
+  needs_follow_up: { claim: "claimed", pay: "paid", cancel: "cancelled", mark_paid_other: "paid_other", write_off: "written_off" },
   written_off: {},
   paid_other: {},
 };

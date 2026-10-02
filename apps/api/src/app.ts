@@ -11,6 +11,7 @@ import { registerMerchantApi } from "./merchantApi.js";
 import { Money } from "./money.js";
 import { registerMoneyApi } from "./moneyApi.js";
 import { registerDashboardApi } from "./dashboardApi.js";
+import { registerUnpaidApi } from "./unpaidApi.js";
 import { Reports } from "./reports.js";
 import { Notifier } from "./notifier.js";
 import { DisabledPushClient, WebPushClient } from "./push.js";
@@ -114,6 +115,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   registerMerchantApi(app, { config, db: deps.db.db, crypto: crypto_, auth, flow, clock, subscribe, vapidPublicKey: config.VAPID_PUBLIC_KEY ?? null });
   registerMoneyApi(app, { config, db: deps.db.db, crypto: crypto_, auth, money, clock });
+  registerUnpaidApi(app, { config, db: deps.db.db, crypto: crypto_, auth, flow, clock });
   registerDashboardApi(app, { config, db: deps.db.db, crypto: crypto_, auth, clock, reports });
   registerRoutes(app, { config: deps.config, db: deps.db, crypto: crypto_, flow, provider: adapters.provider, wa: adapters.wa });
   // The merchant API (M4) authenticates and then calls these flow methods; tests use them directly.

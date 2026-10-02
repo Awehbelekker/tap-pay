@@ -105,6 +105,11 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I33 | One tax invoice per payment, gapless number per merchant (`INV-000001`), for the customer's latest payment in 30 days only; no credit notes for refunds yet (the invoice shows "Refunded since") | Covers the common ask; credit notes need the accountant's format | L4, before pilot |
 | I34 | Reports put a payment on the SAST day it was confirmed (`paid_at`, new in M6) and a refund on the day it settled; "net" is paid less refunds less card fees | Matches how a merchant reads a day; `updated_at` moves on refunds | - |
 | I35 | Receipt links are revoked or reissued by a manager; there is no automatic expiry | Customers need slips for years (tax, L2); revocation covers a misdirected link | L2 retention |
+| I36 | A walk-up customer who only looked at a bill (never pressed Pay now) releases it; only a bill addressed to them, or one they started paying, is "abandoned" and reminded | Reminding someone who merely tapped would be unwelcome, and the tag must stay free for the next customer | Pilot feedback |
+| I37 | STOP opts out of the business that last messaged the customer; STOP ALL (or STOP with no business known) of all. There is no START yet | SPEC 11.3 scopes; undoing an opt-out needs a deliberate customer action we have not designed | M9 POPIA review |
+| I38 | A reminder is marked sent before the WhatsApp call: a crash loses at most one reminder, never sends two; a failed send counts toward the cap | The cap is a promise to the customer | - |
+| I39 | Bills addressed to a number can be reminded although the customer may never have seen the "we may remind you" line (it is on the pay link message); every reminder carries STOP | The merchant addressed the bill to them; the notice in the first message would change every claim message | L2 legal |
+| I40 | Table shares are released, not abandoned, and get no reminders | A share is not tied to one person until paid | Pilot feedback |
 
 ## Schema fixes made in M0
 

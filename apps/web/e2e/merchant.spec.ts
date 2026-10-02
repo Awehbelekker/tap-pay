@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { inboundPayload, sign, type Inbound } from "@tappay/wa-sim";
+import { createDb } from "@tappay/db";
 import { E2E } from "./env";
 
 /**
@@ -203,9 +204,10 @@ test("a manager sets VAT details, services and staff, reads the reports and open
 
   await page.getByLabel("Name", { exact: true }).fill("Thandi");
   await page.getByLabel("Their WhatsApp number").fill("060 000 0003");
+  await page.locator("select[name=role]").selectOption("manager");
   await page.getByRole("button", { name: "Add staff member" }).click();
   await expect(page.getByRole("status")).toHaveText("Thandi added. They sign in with a code sent to their WhatsApp.");
-  await expect(page.locator("[data-staff='Thandi']")).toContainText("staff · ***003");
+  await expect(page.locator("[data-staff='Thandi']")).toContainText("manager · ***003");
   await shot(page, "m6-1-business");
 
   // Reports: the R550 payment, the R110 refund, and the ledger agrees.
@@ -236,6 +238,54 @@ test("a manager sets VAT details, services and staff, reads the reports and open
   await expect(receipt.getByRole("link", { name: "Save PDF" })).toHaveAttribute("href", /\/slip\.pdf$/);
   await receipt.waitForTimeout(2600); // let the print animation finish for the screenshot
   await shot(receipt, "m6-3-receipt");
+});
+
+test("a customer leaves a bill unpaid; the new manager reminds them and marks it paid in cash", async ({ page, request }) => {
+  // Thandi was added as a manager in the test above; this is her first sign-in.
+  await enrol(page, "0600000003");
+  await page.getByRole("button", { name: "New bill" }).click();
+  await page.getByRole("button", { name: /Beginner lesson/ }).click();
+  await page.getByLabel("Customer's WhatsApp number (optional)").fill("082 333 4444");
+  await page.locator("select[name=tag]").selectOption("");
+  await page.getByRole("button", { name: "Create bill" }).click();
+  const share = await page.getByRole("link", { name: "Send via WhatsApp" }).getAttribute("href");
+  const billPath = new URL(/https?:\/\/\S+\/b\/[A-Za-z0-9_-]+/.exec(decodeURIComponent(new URL(share!).searchParams.get("text")!))![0]).pathname;
+
+  // The customer opens the link, sees the bill, and walks away without paying.
+  const cust = "27823334444";
+  const tap = await request.get(`${E2E.apiUrl}${billPath}`, { maxRedirects: 0 });
+  await customerSays(request, cust, { kind: "text", text: new URL(tap.headers().location!).searchParams.get("text")! });
+  await customerSays(request, cust, { kind: "list_reply", id: "tip_none", title: "No tip" });
+  // Ten minutes pass (the session's time runs out), then they write again.
+  const db = createDb(E2E.databaseUrl);
+  await db.pool.query("update sessions set expires_at = now() - interval '1 minute' where closed_at is null and status = 'awaiting_confirm'");
+  await db.close();
+  await customerSays(request, cust, { kind: "text", text: "hi" });
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Unpaid" }).click();
+  const item = page.locator("[data-unpaid]").filter({ hasText: "Beginner lesson" });
+  await expect(item).toContainText("R500,00");
+  await expect(item).toContainText("4444"); // the merchant typed this number, so it shows in full
+  await expect(item.getByTestId("reminders")).toContainText("0 of 3 reminders sent, next");
+  await item.getByRole("button", { name: "Send reminder" }).click();
+  // Sent now inside 08:00 to 20:00 SAST, otherwise queued for the morning.
+  await expect(page.getByRole("status")).toHaveText(/^Reminder (sent\.|queued for .+)$/);
+  await shot(page, "m7-1-unpaid");
+
+  await item.getByRole("button", { name: "Paid another way" }).click();
+  await item.getByLabel("How was it paid?").fill("Cash at the counter");
+  await item.getByRole("button", { name: "Mark paid" }).click();
+  await expect(page.getByRole("status")).toHaveText("Marked R500,00 as paid. Reminders stopped.");
+  await expect(page.getByText("Nothing unpaid.")).toBeVisible();
+
+  // Reminder settings live on the Business screen.
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Business" }).click();
+  await page.locator("select[name=reminderCount]").selectOption("2");
+  await page.locator("select[name=reminderWindowStart]").selectOption("9");
+  await page.getByRole("button", { name: "Save reminders" }).click();
+  await expect(page.getByRole("status")).toHaveText("Reminder settings saved.");
 });
 
 test("the app shell opens offline", async ({ page, context }) => {

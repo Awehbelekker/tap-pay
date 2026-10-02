@@ -256,7 +256,7 @@ export async function transitionBill(
   billId: string,
   from: BillState,
   event: BillEvent,
-  patch: { customer_id?: string | null; claimed_at?: Date | null; paid_at?: Date | null } = {},
+  patch: { customer_id?: string | null; claimed_at?: Date | null; paid_at?: Date | null; abandoned_at?: Date | null; closed_reason?: string | null } = {},
 ): Promise<boolean> {
   const to = nextBill(from, event);
   const r = await db
