@@ -75,6 +75,14 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I13 | "Here is your slip again" applies to a bill on the tag the customer paid in the last 2 hours | Long enough for a customer still at the counter | - |
 | I14 | Merchant create, release, edit and cancel are `PayFlow` methods without HTTP routes | They need staff auth, which arrives with the PWA in M4 | M4 |
 
+## Implementation choices made in M3 (revisit later)
+
+| # | Choice | Why | Revisit |
+| --- | --- | --- | --- |
+| I15 | Default tip cap is 100% of the bill with no rand cap; merchants can lower both | SPEC 7 default; a cap protects customers from typos such as 500 instead of 50 | Owner may want a lower platform-wide default |
+| I16 | Presets that would exceed the cap are hidden rather than clamped | A clamped "20%" that is really 15% would mislead the customer | - |
+| I17 | Tip settings are changed in the database for now | The settings screen is part of the manager dashboard (M4/M6) | M4 |
+
 ## Schema fixes made in M0
 
 See `db/README.md`: `audit_log` trigger ordering, global `opt_outs` with null merchant, truncate guards.

@@ -16,10 +16,14 @@ import {
   nextSession,
   parseBillCode,
   parsePayCommand,
-  parsePercent,
+  offeredPresets,
   parseRands,
-  percentTip,
+  parseTipText,
   postingsForPayment,
+  resolveTip,
+  tipCap,
+  type TipChoice,
+  type TipPolicy,
   type Cents,
   type Clock,
   type PaymentProvider,
@@ -104,7 +108,6 @@ export interface FlowDeps {
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const MIN_CUSTOM_TIP = 100;
 const MIN_OPEN_AMOUNT = 100;
 const CODE_PROMPT_MINUTES = 10;
 const SLIP_AGAIN_WINDOW = 2 * HOUR;
@@ -115,6 +118,10 @@ function describeLines(lines: BillLine[] | null | undefined): string {
 }
 
 type ActiveSession = NonNullable<Awaited<ReturnType<typeof latestActiveSession>>>;
+
+function tipPolicy(s: ActiveSession): TipPolicy {
+  return { presetsPercent: s.tipPresets, minCents: s.tipMin, maxBp: s.tipMaxBp, maxCents: s.tipMaxCents };
+}
 type TagContext = NonNullable<Awaited<ReturnType<typeof findTagForTap>>>;
 
 export class FlowError extends Error {
@@ -555,11 +562,11 @@ export class PayFlow {
           ? say(catalogue.quickTip({ merchant, staff: s.staffName, presets: s.quickTipPresets.map((c) => cents(c)) }))
           : say(catalogue.askAmount({ merchant }));
       case "awaiting_tip":
-        return say(catalogue.claimFixed({ merchant, description, base, staff: s.staffName, tipPercents: s.tipPresets }));
+        return say(catalogue.claimFixed({ merchant, description, base, staff: s.staffName, tipPercents: offeredPresets(base, tipPolicy(s)) }));
       case "awaiting_confirm":
         return s.billType === "quick_tip"
           ? say(catalogue.confirmQuickTip({ merchant, staff: s.staffName, amount: cents(s.tip) }))
-          : say(catalogue.confirm({ merchant, description, base, tip: cents(s.tip) }));
+          : say(catalogue.confirm({ merchant, description, base, tip: cents(s.tip), tipsEnabled: s.tipsEnabled }));
       case "awaiting_payment": {
         const p = await pendingPaymentForSession(this.d.db, s.id);
         const url = (p?.raw as { checkoutUrl?: string } | null)?.checkoutUrl;
@@ -572,15 +579,23 @@ export class PayFlow {
     }
   }
 
-  private async onCustomTip(to: string, customerId: string, s: ActiveSession, text: string): Promise<void> {
+  /** Apply a tip choice through the merchant's tip policy (SPEC 7, packages/core/tips). */
+  private async applyTip(to: string, customerId: string, s: ActiveSession, choice: TipChoice): Promise<void> {
     const base = cents(s.base ?? 0);
-    // "12%" is a percentage of the bill (round half up, SPEC 7); a bare number is rands.
-    const bp = parsePercent(text);
-    const tip = bp !== null ? (bp <= 10000 ? percentTip(base, bp) : null) : parseRands(text);
-    if (tip === null || tip < MIN_CUSTOM_TIP || tip > base) {
-      return this.send(to, customerId, s.merchantId, catalogue.tipCustomInvalid({ max: base }));
-    }
-    return this.chooseTip(to, customerId, s, tip);
+    const policy = tipPolicy(s);
+    const r = resolveTip(base, choice, policy);
+    if (r.ok) return this.chooseTip(to, customerId, s, r.tip);
+    // A forged or stale preset: show the real choices again.
+    if (r.reason === "not_offered") return this.resendPrompt(to, customerId, s);
+    return this.send(to, customerId, s.merchantId, catalogue.tipCustomInvalid({ min: cents(policy.minCents), max: tipCap(base, policy), maxPercent: policy.maxBp / 100 }));
+  }
+
+  /** Typed tip after "Other amount": "12%" is a percentage of the bill, a bare number is rands. */
+  private async onCustomTip(to: string, customerId: string, s: ActiveSession, text: string): Promise<void> {
+    const choice = parseTipText(text);
+    // Unparseable text gets the same "between min and max" reply as an out-of-range amount.
+    if (!choice) return this.applyTip(to, customerId, s, { kind: "amount", cents: 0 });
+    return this.applyTip(to, customerId, s, choice);
   }
 
   /** Typed amount: an open bill's amount, or a quick tip's "Other" amount. */
@@ -615,7 +630,12 @@ export class PayFlow {
   private async chooseTip(to: string, customerId: string, s: ActiveSession, tip: Cents): Promise<void> {
     const ok = await transitionSession(this.d.db, s.id, "awaiting_tip", "choose_tip", { tip_cents: tip });
     if (!ok) return; // a concurrent reply already moved this session on
-    return this.send(to, customerId, s.merchantId, catalogue.confirm({ merchant: s.merchantName, description: this.describe(s), base: cents(s.base ?? 0), tip }));
+    return this.send(
+      to,
+      customerId,
+      s.merchantId,
+      catalogue.confirm({ merchant: s.merchantName, description: this.describe(s), base: cents(s.base ?? 0), tip, tipsEnabled: s.tipsEnabled }),
+    );
   }
 
   private async onReply(to: string, customerId: string, s: ActiveSession, id: string): Promise<void> {
@@ -625,10 +645,10 @@ export class PayFlow {
     const tipChoice = parseTipId(id);
     if (tipChoice && s.status === "awaiting_tip") {
       if (tipChoice.kind === "custom") return this.send(to, customerId, s.merchantId, catalogue.tipCustomAsk());
-      // Only offer what the merchant configured: a forged id cannot set an arbitrary percent.
-      if (tipChoice.kind === "percent" && !s.tipPresets.includes(tipChoice.bp / 100)) return this.resendPrompt(to, customerId, s);
-      const tip = tipChoice.kind === "none" ? cents(0) : percentTip(cents(s.base ?? 0), tipChoice.bp);
-      return this.chooseTip(to, customerId, s, tip);
+      if (tipChoice.kind === "none") return this.applyTip(to, customerId, s, { kind: "none" });
+      // Presets are whole percents; resolveTip refuses any that is not on offer for this bill.
+      if (tipChoice.bp % 100 !== 0) return this.resendPrompt(to, customerId, s);
+      return this.applyTip(to, customerId, s, { kind: "preset", percent: tipChoice.bp / 100 });
     }
 
     const qt = parseQuickTipId(id);
@@ -638,7 +658,9 @@ export class PayFlow {
       return this.setQuickTip(to, customerId, s, cents(qt));
     }
 
-    if (id === IDS.changeTip && s.status === "awaiting_confirm") {
+    // Change tip only where a tip step exists: a quick tip changes its amount instead, and a
+    // merchant with tips off never offers it (a stale or forged reply just re-shows the step).
+    if (id === IDS.changeTip && s.status === "awaiting_confirm" && (s.tipsEnabled || s.billType === "quick_tip")) {
       const event = s.billType === "quick_tip" ? "change_amount" : "change_tip";
       if (await transitionSession(db, s.id, "awaiting_confirm", event, { tip_cents: 0 })) {
         const fresh = await latestActiveSession(db, customerId);

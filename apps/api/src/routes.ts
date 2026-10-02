@@ -3,7 +3,7 @@ import { formatRands, cents, WebhookSignatureError, type PaymentProvider } from 
 import type { Config } from "@tappay/config";
 import { finishWebhookEvent, receiptView, recordWebhookEvent, type Crypto, type DbHandle } from "@tappay/db";
 import { MockPaymentProvider, type MockOutcome } from "@tappay/providers";
-import { methodLabel, renderSlipPng } from "@tappay/slip";
+import { methodLabel, renderSlipPng, type SlipData } from "@tappay/slip";
 import { parseInbound, SimWhatsAppClient, verifyMetaSignature } from "@tappay/whatsapp";
 import type { PayFlow } from "./flow.js";
 
@@ -23,6 +23,31 @@ function page(title: string, body: string): string {
 }
 
 const NOT_VERIFIED = page("Payment unavailable", "<h1>Payment unavailable</h1><p>We could not verify this tag. Please ask staff to take payment another way.</p>");
+
+type ReceiptView = NonNullable<Awaited<ReturnType<typeof receiptView>>>;
+
+/**
+ * What the customer's slip shows (MESSAGES.md "Slip fields"). The tip is its own line, named
+ * for the staff member when there is one; a share's slip shows the share, not the whole table's
+ * bill; a quick tip has no bill lines. The split between parties is never shown.
+ */
+export function slipData(v: ReceiptView, product: string): SlipData {
+  return {
+    product,
+    merchant: v.merchantName,
+    receiptNumber: v.number,
+    reference: v.paymentId.slice(0, 8),
+    paidAt: v.paidAt,
+    lines: v.shareLabel
+      ? [{ description: v.shareLabel, amount: cents(v.base ?? 0) }]
+      : (v.lines ?? []).map((l) => ({ description: l.description, amount: cents(l.amountCents * (l.quantity ?? 1)) })),
+    base: cents(v.base ?? 0),
+    tip: cents(v.tip),
+    total: cents(v.total),
+    method: methodLabel(v.method),
+    staff: v.tip > 0 ? v.staffName : null,
+  };
+}
 
 export function registerRoutes(app: FastifyInstance, d: RouteDeps): void {
   const { config, flow, provider } = d;
@@ -181,22 +206,7 @@ document.querySelectorAll("button").forEach(b => b.onclick = async () => {
     const t = req.params.token;
     const v = receiptToken.test(t) ? await receiptView(d.db.db, t) : undefined;
     if (!v) return reply.code(404).send({ code: "not_found", message: "receipt not found" });
-    const png = await renderSlipPng({
-      product: config.PRODUCT_NAME,
-      merchant: v.merchantName,
-      receiptNumber: v.number,
-      reference: v.paymentId.slice(0, 8),
-      paidAt: v.paidAt,
-      // A share's slip shows the share, not the whole table's bill; a quick tip has no bill lines.
-      lines: v.shareLabel
-        ? [{ description: v.shareLabel, amount: cents(v.base ?? 0) }]
-        : (v.lines ?? []).map((l) => ({ description: l.description, amount: cents(l.amountCents * (l.quantity ?? 1)) })),
-      base: cents(v.base ?? 0),
-      tip: cents(v.tip),
-      total: cents(v.total),
-      method: methodLabel(v.method),
-      staff: v.tip > 0 ? v.staffName : null,
-    });
+    const png = await renderSlipPng(slipData(v, config.PRODUCT_NAME));
     return reply.header("cache-control", "private, max-age=3600").type("image/png").send(png);
   });
 

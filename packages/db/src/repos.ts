@@ -48,6 +48,9 @@ export async function findTagForTap(db: Db, by: { code: string } | { id: string 
       "merchants.quick_tip_min_cents as quickTipMin",
       "merchants.quick_tip_max_cents as quickTipMax",
       "merchants.open_amount_max_cents as openAmountMax",
+      "merchants.tip_min_cents as tipMin",
+      "merchants.tip_max_bp as tipMaxBp",
+      "merchants.tip_max_cents as tipMaxCents",
     ]);
   return ("code" in by ? q.where("tags.code", "=", by.code) : q.where("tags.id", "=", by.id)).executeTakeFirst();
 }
@@ -407,6 +410,9 @@ export async function latestActiveSession(db: Db, customerId: string) {
       "merchants.quick_tip_min_cents as quickTipMin",
       "merchants.quick_tip_max_cents as quickTipMax",
       "merchants.open_amount_max_cents as openAmountMax",
+      "merchants.tip_min_cents as tipMin",
+      "merchants.tip_max_bp as tipMaxBp",
+      "merchants.tip_max_cents as tipMaxCents",
       "sessions.status",
       "sessions.base_cents as base",
       "sessions.tip_cents as tip",

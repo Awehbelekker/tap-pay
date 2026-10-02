@@ -78,22 +78,25 @@ export const catalogue = {
     return { kind: "text", body: "Type the tip in rand, for example 25, or as a percentage, for example 12%." };
   },
 
-  tipCustomInvalid(i: { max: Cents }): OutMessage {
+  tipCustomInvalid(i: { min: Cents; max: Cents; maxPercent: number }): OutMessage {
+    const pct = Number.isInteger(i.maxPercent) ? `${i.maxPercent}` : i.maxPercent.toFixed(2).replace(".", ",");
     return {
       kind: "buttons",
-      body: `Please send an amount between R1,00 and ${R(i.max)}, or a percentage up to 100%, or tap No tip.`,
+      body: `Please send an amount between ${R(i.min)} and ${R(i.max)}, or a percentage up to ${pct}%, or tap No tip.`,
       buttons: [{ id: IDS.tipNone, title: "No tip" }],
     };
   },
 
-  confirm(i: { merchant: string; description: string; base: Cents; tip: Cents }): OutMessage {
+  /** `tipsEnabled: false` (merchant takes no tips): no tip line and no Change tip button. */
+  confirm(i: { merchant: string; description: string; base: Cents; tip: Cents; tipsEnabled?: boolean }): OutMessage {
     const total = (i.base + i.tip) as Cents;
+    const tips = i.tipsEnabled ?? true;
     return {
       kind: "buttons",
-      body: `Pay ${R(total)} to ${i.merchant}?\n${i.description}: ${R(i.base)}\nTip: ${R(i.tip)}`,
+      body: `Pay ${R(total)} to ${i.merchant}?\n${i.description}: ${R(i.base)}${tips ? `\nTip: ${R(i.tip)}` : ""}`,
       buttons: [
         { id: IDS.payNow, title: "Pay now" },
-        { id: IDS.changeTip, title: "Change tip" },
+        ...(tips ? [{ id: IDS.changeTip, title: "Change tip" }] : []),
         { id: IDS.cancel, title: "Cancel" },
       ],
     };

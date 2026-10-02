@@ -14,7 +14,7 @@ describe("catalogue", () => {
   const all: OutMessage[] = [
     catalogue.claimFixed({ merchant: "Bean and Brew Coffee, Tokai", description: "Beginner lesson", base: cents(50000), staff: "Sipho", tipPercents: [10, 15, 20] }),
     catalogue.tipCustomAsk(),
-    catalogue.tipCustomInvalid({ max: cents(50000) }),
+    catalogue.tipCustomInvalid({ min: cents(100), max: cents(50000), maxPercent: 100 }),
     catalogue.confirm({ merchant: "Bean and Brew", description: "Beginner lesson", base: cents(50000), tip: cents(5000) }),
     catalogue.payLink({ merchant: "Bean and Brew", total: cents(55000), url: "https://x.test/c/1", minutes: 10 }),
     catalogue.payFailed({ merchant: "Bean and Brew" }),

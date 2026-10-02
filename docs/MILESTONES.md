@@ -14,7 +14,7 @@ Accept: scripted e2e passes; duplicate webhook has no double effect; webhook wit
 All six modes, bill types, matching algorithm (SPEC §5): number match, first-tap claim, bill code with 3 attempts and 15 min lock, release, shares. Pure state machines with exhaustive tests.
 Accept: concurrency test (50 parallel taps on one bill yields exactly one claim); every mode has an e2e scenario.
 
-## M3 Tips
+## M3 Tips (done 2026-10-02)
 Presets, custom tip, no tip, quick-tip bills, limits (max tip percent or amount), tip shown on slip.
 Accept: property tests on tip maths; all tip paths e2e.
 

@@ -101,6 +101,10 @@ All transitions are pure functions in `packages/core/state`. Illegal transitions
 - Custom tip: numeric rands (up to 2 decimals), or a typed percentage of the bill such as `12%` or `12,5%` (the % sign is required, up to 2 decimals, rounded half up like the presets). Min R1.00 when non-zero, max 100% of the bill (configurable cap). Invalid input re-asks.
 - Quick tip mode: presets R5, R10, R20 and Other; min R2.00, max R1,000.00 (configurable).
 - Tip and bill are separate ledger lines on one payment.
+- Per-merchant tip policy (M3): `tip_presets` (at most 4 whole percents, 1 to 100, enforced in the database), `tip_min_cents` (default R1,00, applies to custom tips), `tip_max_bp` (default 100% of the bill) and optional `tip_max_cents`. The cap is the lower of the two. Presets above the cap, or that round to R0,00, are not shown; a reply for a preset not on show is ignored and the list is shown again.
+- Tips off (`tips_enabled = false`): the customer goes straight to the confirmation, which has no tip line and no Change tip button.
+- On a split bill, a percentage tip is on the payer's share. A quick tip is all tip.
+- All tip rules are pure functions in `packages/core/src/tips.ts` (property-tested).
 
 ## 8. Revenue split, tip split and ledger
 

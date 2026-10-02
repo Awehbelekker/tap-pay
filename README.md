@@ -10,11 +10,13 @@ HTTP and receive signed `bill.paid` events, and every external system sits behin
 
 ## Status
 
-**M0 to M2 done.** A customer can tap a static tag or open a bill link, claim the bill in
+**M0 to M3 done.** A customer can tap a static tag or open a bill link, claim the bill in
 WhatsApp (simulator), choose a tip, pay through the mock hosted checkout and get a branded
 slip. All six merchant modes work: appointment (number match, 4-digit code), counter (first
 tap, or the customer types the amount), table (split into shares), quick tip, field and remote
-invoice (bill links). Next: M3 tips. See `docs/MILESTONES.md`.
+invoice (bill links). Tips: percentage presets, custom rand or percentage tips, per-merchant
+caps, tips off, and the tip on the slip and the ledger. Next: M4 merchant PWA and
+notifications. See `docs/MILESTONES.md`.
 
 Try it by hand after the quick start: `pnpm demo:bill`, open http://localhost:4000, press
 **Tap tag**, then **Send**.

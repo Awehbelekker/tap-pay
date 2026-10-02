@@ -39,6 +39,9 @@ export interface MerchantsTable {
   quick_tip_min_cents: Generated<number>;
   quick_tip_max_cents: Generated<number>;
   open_amount_max_cents: Generated<number>;
+  tip_min_cents: Generated<number>;
+  tip_max_bp: Generated<number>;
+  tip_max_cents: number | null;
   created_at: Generated<Date>;
 }
 
