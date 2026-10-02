@@ -92,7 +92,7 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I20 | SSE takes the access token as `?access_token=` | EventSource cannot set headers. Query strings are stripped from logs; tokens live 15 minutes | - |
 | I21 | Live events fan out with Postgres LISTEN/NOTIFY | Works across several API instances without a new service | M10 load test |
 | I22 | Push without VAPID keys is off, and alerts go by WhatsApp template (`merchant_paid_alert`, `merchant_failed_alert`); SMS is not built | SPEC 12 channel chain; SMS is optional | Meta template approval in M8; SMS if pilots need it |
-| I23 | "Manager daily summary" is a setting (`notify_managers = daily_summary`) but the summary job is not built; daily-summary managers get no per-payment alert | Belongs with reports (M6) | M6 |
+| I23 | Managers on `daily_summary` get yesterday's totals at 06:30 SAST (push, else `merchant_daily_summary` template), not per-payment alerts. Built in M6 | A full day is only known after midnight; 06:30 is before most businesses open | Pilot feedback on the time |
 | I24 | Web NFC is used only to read a tag's code for assignment; writing tags is not built | Tags are programmed by the operator (OPEN_QUESTIONS T4) | M10 operator tools |
 | I25 | Provider fees are not reversed on a refund; each party keeps its share of the fee debit | Providers generally keep the fee on refunds; to be confirmed per provider | M8 PROVIDER_NOTES |
 | I26 | Payouts are written to the ledger when created; a refund after payout makes the balance negative, which the next payout nets off (never a negative payout) | SPEC 9; a created payout is money committed to that person | - |
@@ -100,6 +100,11 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I28 | Split rules are sale shares only (basis points); fixed-amount shares per service and pool-by-hours are not built (shift weights stand in for hours) | Covers the SPEC example and pilots; fixed amounts can be added to `SaleShare` without schema change | Pilot feedback |
 | I29 | The `payout.run` job handler lives in the API process (it needs the API's Money service); apps/worker owns the schedule | Avoids a second copy of the money code; pg-boss hands each job to one instance | M10, if the API should stay request-only |
 | I30 | `SPLIT_STRATEGY` is one setting for the deployment; the per-merchant `merchants.split_strategy` column is not read yet | One provider per deployment until M8 | M8 |
+| I31 | Tips carry no VAT and are shown as "Gratuity (no VAT)" on tax invoices; the VAT is 15/115 of the bill, rounded half up | Common treatment of voluntary gratuities passed to staff; needs an accountant's confirmation (L4) | Before the first VAT-registered pilot |
+| I32 | Slips and invoices read the merchant's VAT details when rendered, so a slip made before registration shows VAT if opened after it | Simple, and merchants rarely change registration; a snapshot per receipt can be added if needed | L4 |
+| I33 | One tax invoice per payment, gapless number per merchant (`INV-000001`), for the customer's latest payment in 30 days only; no credit notes for refunds yet (the invoice shows "Refunded since") | Covers the common ask; credit notes need the accountant's format | L4, before pilot |
+| I34 | Reports put a payment on the SAST day it was confirmed (`paid_at`, new in M6) and a refund on the day it settled; "net" is paid less refunds less card fees | Matches how a merchant reads a day; `updated_at` moves on refunds | - |
+| I35 | Receipt links are revoked or reissued by a manager; there is no automatic expiry | Customers need slips for years (tax, L2); revocation covers a misdirected link | L2 retention |
 
 ## Schema fixes made in M0
 
@@ -114,4 +119,5 @@ Append entries as `YYYY-MM-DD, question id, decision, reason, who`.
 2026-10-02, -, Apps run TypeScript through tsx in dev and production (no build step) for M0; revisit before pilot if cold start or memory matters, Claude Code
 2026-10-02, O2, Tip step implemented as a list message (see I3), Claude Code
 2026-10-02, -, M5: ledger_only stays the default; collect_then_payout is built and tested against the mock but still refuses to start without FUNDS_FLOW_LEGAL_SIGNOFF, Claude Code
+2026-10-02, -, M6: tax invoices are issued over WhatsApp on request (reply INVOICE) as PDFs; format to be confirmed by an accountant before the first VAT-registered pilot (L4), Claude Code
 2026-10-02, O3, Quick-tip presets are per merchant, default R5/R10/R20, shown as a list (see I9), Claude Code

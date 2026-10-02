@@ -70,6 +70,10 @@
     if (m.kind === "image") {
       const img = document.createElement("img"); img.src = m.imageUrl; img.alt = "Slip"; d.appendChild(img);
       textWithLinks(d, m.caption || "");
+    } else if (m.kind === "document") {
+      const a = document.createElement("a"); a.href = m.documentUrl; a.target = "_blank"; a.rel = "noreferrer"; a.textContent = "[PDF] " + m.filename; d.appendChild(a);
+      d.appendChild(document.createElement("br"));
+      textWithLinks(d, m.caption || "");
     } else if (m.kind === "template") {
       textWithLinks(d, "[template " + m.template + "] " + m.params.join(" | "));
     } else {

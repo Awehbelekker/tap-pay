@@ -149,6 +149,37 @@ export class Notifier implements FlowEvents, MoneyAlerts {
     }
   }
 
+  /**
+   * End-of-day summary (SPEC 12) for managers of merchants set to `daily_summary`. Push first,
+   * then the `merchant_daily_summary` template. Once per manager per day.
+   */
+  async dailySummary(e: { merchantId: string; date: string; label: string; count: number; totalCents: number; tipCents: number; refundCents: number; owedCents: number }): Promise<number> {
+    const merchant = await this.merchantName(e.merchantId);
+    const managers = await this.d.db
+      .selectFrom("users")
+      .select(["id", "msisdn_enc"])
+      .where("merchant_id", "=", e.merchantId)
+      .where("active", "=", true)
+      .where("notify_mute", "=", false)
+      .where("role", "in", ["manager", "owner"])
+      .execute();
+    const body = `${e.count} payment${e.count === 1 ? "" : "s"}, ${R(e.totalCents)} (tips ${R(e.tipCents)}). Refunds ${R(e.refundCents)}. Staff owed ${R(e.owedCents)}.`;
+    let sent = 0;
+    for (const u of managers) {
+      const dedupe = `summary:${e.merchantId}:${e.date}:${u.id}`;
+      try {
+        const pushed = await this.tryPush(e.merchantId, u.id, dedupe, "summary", { title: `${merchant}: ${e.label}`, body, billId: null, kind: "summary" });
+        if (pushed === "duplicate") continue;
+        // MESSAGES.md merchant_daily_summary.
+        if (pushed === "not_delivered") await this.tryWhatsApp(e.merchantId, u.id, dedupe, "summary", { name: "merchant_daily_summary", params: [merchant, e.label, String(e.count), R(e.totalCents), R(e.tipCents), R(e.refundCents), R(e.owedCents)] }, this.d.crypto.decrypt(u.msisdn_enc));
+        sent++;
+      } catch (err) {
+        this.d.log.error({ err: (err as Error).message }, "daily summary failed");
+      }
+    }
+    return sent;
+  }
+
   private async recipients(e: PaymentAlert, staffOnly: boolean) {
     const { db } = this.d;
     const m = await db.selectFrom("merchants").select("notify_managers").where("id", "=", e.merchantId).executeTakeFirstOrThrow();

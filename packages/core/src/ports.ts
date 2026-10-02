@@ -124,6 +124,8 @@ export interface WhatsAppClient {
   sendList(to: string, body: string, buttonLabel: string, rows: WaListRow[]): Promise<WaSendResult>;
   sendTemplate(to: string, template: string, lang: string, params: string[]): Promise<WaSendResult>;
   sendImage(to: string, imageUrl: string, caption?: string): Promise<WaSendResult>;
+  /** A file by public URL (tax invoice PDF). WhatsApp fetches it. */
+  sendDocument(to: string, documentUrl: string, filename: string, caption?: string): Promise<WaSendResult>;
   markRead(messageId: string): Promise<void>;
 }
 

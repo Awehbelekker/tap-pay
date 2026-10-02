@@ -26,7 +26,7 @@ Accept: Playwright flows; notification delivered once per event per channel; off
 Split rules UI and API, ledger postings, rounding rules, split strategies (`ledger_only` default, `native` and `collect_then_payout` behind adapters and flags), balances, refunds (full and partial) with reverse postings, payout run with threshold, staff payout notice.
 Accept: ledger sums to payment amount for every scenario (property test); ledger is append-only (DB trigger test); refund reverses splits; payout idempotent.
 
-## M6 Dashboard, receipts, tax invoice
+## M6 Dashboard, receipts, tax invoice (done 2026-10-02)
 Manager dashboard, CSV export, receipt page with print animation and sound toggle, tax invoice PDF for VAT-registered merchants, end-of-day summary.
 Accept: totals reconcile with ledger; receipt token unguessable and revocable.
 

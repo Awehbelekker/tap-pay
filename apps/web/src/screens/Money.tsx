@@ -164,6 +164,28 @@ function PaymentRow({ p, manager, act }: { p: Payment; manager: boolean; act: (f
           </button>
         )}
       </div>
+      <div className="mt-1 flex gap-3 text-xs">
+        {p.receiptUrl ? (
+          <a className="text-teal-700 underline" href={p.receiptUrl} target="_blank" rel="noreferrer">
+            Receipt
+          </a>
+        ) : (
+          <span className="text-slate-500">Receipt link revoked</span>
+        )}
+        {manager && (
+          <button
+            className="text-slate-600 underline"
+            onClick={() =>
+              void act(async () => {
+                await api(`/v1/merchant/payments/${p.id}/receipt`, { method: "POST", body: JSON.stringify({ action: "reissue" }) });
+                return "New receipt link made. The old link no longer works.";
+              })
+            }
+          >
+            New receipt link
+          </button>
+        )}
+      </div>
       {open && (
         <form
           className="mt-2 flex flex-col gap-2"

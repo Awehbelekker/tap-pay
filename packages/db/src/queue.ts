@@ -14,6 +14,7 @@ export const QUEUES = [
   "notify.retry",
   "webhook.replay",
   "retention.sweep",
+  "summary.daily",
 ] as const;
 export type QueueName = (typeof QUEUES)[number];
 
@@ -24,6 +25,7 @@ export const SCHEDULES: { name: QueueName; cron: string }[] = [
   { name: "reconcile.payments", cron: "*/15 * * * *" },
   { name: "notify.retry", cron: "* * * * *" },
   { name: "retention.sweep", cron: "30 2 * * *" },
+  { name: "summary.daily", cron: "30 6 * * *" },
 ];
 
 export const SCHEDULE_TZ = "Africa/Johannesburg";

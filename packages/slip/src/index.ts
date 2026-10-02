@@ -6,8 +6,9 @@ import { formatRands, type Cents } from "@tappay/core";
 
 /**
  * Customer slip as a PNG (MESSAGES.md "Slip fields"; SPEC 14), rendered server-side with satori
- * (layout to SVG) and resvg (SVG to PNG). No browser, no network. Logo and VAT lines arrive with
- * receipt branding in M6. The split between parties is never shown to the customer.
+ * (layout to SVG) and resvg (SVG to PNG). No browser, no network. A VAT-registered merchant's
+ * slip shows its VAT number and the VAT in the bill (tips carry none). The split between
+ * parties is never shown to the customer.
  */
 
 export interface SlipData {
@@ -22,6 +23,8 @@ export interface SlipData {
   total: Cents;
   method: string;
   staff: string | null;
+  /** VAT-registered merchants: their number and the VAT contained in the bill. */
+  vat?: { number: string; amount: Cents } | null;
 }
 
 const require = createRequire(import.meta.url);
@@ -79,11 +82,13 @@ export async function renderSlipPng(d: SlipData): Promise<Buffer> {
       ...(d.base > 0 || d.lines.length ? [row("Bill", R(d.base))] : []),
       row(d.staff ? `Tip for ${d.staff}` : "Tip", R(d.tip)),
       row("Total paid", R(d.total), true),
+      ...(d.vat ? [h("div", { display: "flex", justifyContent: "space-between", fontSize: 20, color: "#4b5563", marginTop: 6 }, [h("span", { display: "flex" }, "Bill includes VAT at 15%"), h("span", { display: "flex" }, R(d.vat.amount))])] : []),
       rule(),
       h("div", { display: "flex", flexDirection: "column", fontSize: 20, color: "#4b5563" }, [
         h("div", { display: "flex" }, `Paid with ${d.method}`),
         h("div", { display: "flex", marginTop: 4 }, `Receipt ${d.receiptNumber}`),
         h("div", { display: "flex", marginTop: 4 }, `Ref ${d.reference}`),
+        ...(d.vat ? [h("div", { display: "flex", marginTop: 4 }, `VAT no. ${d.vat.number}`)] : []),
       ]),
       h("div", { display: "flex", justifyContent: "center", fontSize: 18, color: "#6b7280", marginTop: 28 }, `Powered by ${d.product}`),
     ],
@@ -106,3 +111,5 @@ export function methodLabel(m: string | null | undefined): string {
       return "card or wallet";
   }
 }
+
+export * from "./pdf.js";

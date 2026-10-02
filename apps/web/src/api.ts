@@ -121,6 +121,17 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** A file from the API (CSV export), with the same sign-in handling as `api`. */
+export async function apiBlob(path: string): Promise<Blob> {
+  let r = await raw(path);
+  if (r.status === 401 && (await refresh())) r = await raw(path);
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new ApiError(r.status, body?.code ?? "error", body?.message ?? "Something went wrong");
+  }
+  return r.blob();
+}
+
 /** Unauthenticated auth calls. */
 export async function authCall<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(`${API}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -256,6 +267,7 @@ export interface Payment {
   status: "succeeded" | "partially_refunded" | "refunded";
   paidAt: string;
   maskedCustomer: string | null;
+  receiptUrl: string | null;
 }
 
 export interface MoneySettings {
@@ -269,4 +281,29 @@ export interface SplitRule {
   serviceId: string | null;
   staffUserId: string | null;
   basisPoints: number;
+}
+
+export interface ReportSummary {
+  from: string;
+  to: string;
+  count: number;
+  grossCents: number;
+  baseCents: number;
+  tipCents: number;
+  feeCents: number;
+  refundCount: number;
+  refundCents: number;
+  netCents: number;
+  reconciled: boolean;
+  byDay: { date: string; count: number; grossCents: number; tipCents: number }[];
+  byParty: { partyKind: string; userId: string | null; name: string | null; salesCents: number; tipCents: number; feeCents: number; refundCents: number; netCents: number }[];
+  byService: { serviceId: string | null; name: string; count: number; amountCents: number }[];
+}
+
+export interface Business {
+  name: string;
+  tradingName: string | null;
+  vatRegistered: boolean;
+  vatNumber: string | null;
+  address: string | null;
 }

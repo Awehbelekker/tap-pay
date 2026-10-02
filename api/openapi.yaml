@@ -64,6 +64,7 @@ components:
         method: {type: [string, 'null']}
         paidAt: {type: string, format: date-time}
         maskedCustomer: {type: [string, 'null']}
+        receiptUrl: {type: [string, 'null'], description: null when the link was revoked}
     Balance:
       type: object
       description: Ledger totals for one party (signed cents). balanceCents is what is owed now.
@@ -105,6 +106,33 @@ components:
         serviceId: {type: [string, 'null'], format: uuid}
         staffUserId: {type: [string, 'null'], format: uuid}
         basisPoints: {type: integer, minimum: 0, maximum: 10000}
+    Business:
+      type: object
+      properties:
+        name: {type: string}
+        tradingName: {type: [string, 'null']}
+        vatRegistered: {type: boolean}
+        vatNumber: {type: [string, 'null'], pattern: '^4[0-9]{9}$'}
+        address: {type: [string, 'null']}
+    ReportSummary:
+      type: object
+      required: [from, to, count, grossCents, tipCents, feeCents, refundCents, netCents, reconciled, ledger, byDay, byParty, byService]
+      properties:
+        from: {type: string, format: date}
+        to: {type: string, format: date}
+        count: {type: integer}
+        grossCents: {type: integer}
+        baseCents: {type: integer}
+        tipCents: {type: integer}
+        feeCents: {type: integer}
+        refundCount: {type: integer}
+        refundCents: {type: integer}
+        netCents: {type: integer}
+        reconciled: {type: boolean, description: The same totals summed from the ledger agree}
+        ledger: {type: object, properties: {creditsCents: {type: integer}, feeCents: {type: integer}, refundCents: {type: integer}}}
+        byDay: {type: array, items: {type: object, properties: {date: {type: string, format: date}, count: {type: integer}, grossCents: {type: integer}, tipCents: {type: integer}}}}
+        byParty: {type: array, items: {type: object, properties: {partyKind: {type: string}, userId: {type: [string, 'null']}, name: {type: [string, 'null']}, salesCents: {type: integer}, tipCents: {type: integer}, feeCents: {type: integer}, refundCents: {type: integer}, netCents: {type: integer}}}}
+        byService: {type: array, items: {type: object, properties: {serviceId: {type: [string, 'null']}, name: {type: string}, count: {type: integer}, amountCents: {type: integer}}}}
     MerchantSettings:
       type: object
       properties:
@@ -148,15 +176,27 @@ paths:
   /r/{receiptToken}:
     get:
       tags: [public]
-      summary: Receipt page and PNG
-      parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: Receipt}, '404': {$ref: '#/components/responses/Err'}}
+      summary: Receipt page (slip with print animation, sound toggle, PDF link). Private, no-store, strict CSP. 404 for unknown or revoked tokens.
+      parameters: [{name: receiptToken, in: path, required: true, schema: {type: string, pattern: '^[A-Za-z0-9_-]{32}$'}}]
+      responses: {'200': {description: Receipt, content: {text/html: {schema: {type: string}}}}, '404': {$ref: '#/components/responses/Err'}}
   /r/{receiptToken}/slip.png:
     get:
       tags: [public]
       summary: Slip image (PNG, under 1 MB) for a receipt token
       parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: PNG, content: {image/png: {schema: {type: string, format: binary}}}}, '404': {$ref: '#/components/responses/Err'}}
+  /r/{receiptToken}/slip.pdf:
+    get:
+      tags: [public]
+      summary: The slip as a PDF (download)
+      parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: PDF, content: {application/pdf: {schema: {type: string, format: binary}}}}, '404': {$ref: '#/components/responses/Err'}}
+  /i/{invoiceToken}:
+    get:
+      tags: [public]
+      summary: An issued tax invoice (PDF). The customer gets the link on WhatsApp after replying INVOICE.
+      parameters: [{name: invoiceToken, in: path, required: true, schema: {type: string, pattern: '^[A-Za-z0-9_-]{32}$'}}]
+      responses: {'200': {description: PDF, content: {application/pdf: {schema: {type: string, format: binary}}}}, '404': {$ref: '#/components/responses/Err'}}
   /pay/return:
     get: {tags: [public], summary: Informational page after hosted checkout. Never marks anything paid., responses: {'200': {description: page}}}
   /sim/outbox:
@@ -229,10 +269,10 @@ paths:
     get: {tags: [merchant], security: [{bearer: []}], summary: 'Server-sent events: bill.created, bill.claimed, share.claimed, bill.updated, bill.released, bill.cancelled, bill.paid, bill.failed. Resume with Last-Event-ID. EventSource may pass ?access_token=. Heartbeat every 25 s.', responses: {'200': {description: text/event-stream, content: {text/event-stream: {schema: {type: string}}}}}}
   /v1/merchant/services:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
-    post: {tags: [merchant], security: [{bearer: []}], responses: {'201': {description: created}}}
+    post: {tags: [merchant], security: [{bearer: []}], summary: Add a service (manager), requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name, priceCents], properties: {name: {type: string}, priceCents: {type: integer, minimum: 0}}}}}}, responses: {'201': {description: created}}}
   /v1/merchant/staff:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
-    post: {tags: [merchant], security: [{bearer: []}], summary: Invite staff by number, responses: {'201': {description: invited}}}
+    post: {tags: [merchant], security: [{bearer: []}], summary: Add staff by WhatsApp number (manager). They sign in with a WhatsApp code; only an owner adds an owner., requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name, msisdn], properties: {name: {type: string}, msisdn: {type: string}, role: {type: string, enum: [staff, manager, owner]}}}}}}, responses: {'201': {description: added}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '422': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/tags:
     get: {tags: [merchant], security: [{bearer: []}], summary: Managers see all tags; staff see their own and unassigned ones, responses: {'200': {description: list}}}
   /v1/merchant/tags/{code}:
@@ -269,8 +309,18 @@ paths:
     post: {tags: [merchant], security: [{bearer: []}], summary: Start a tip-pool shift (manager); ends any running one. Weight is each member's share of pooled tips., requestBody: {required: true, content: {application/json: {schema: {type: object, required: [members], properties: {members: {type: array, minItems: 1, items: {type: object, required: [userId], properties: {userId: {type: string, format: uuid}, weight: {type: integer, minimum: 1, maximum: 100}}}}}}}}}, responses: {'201': {description: started}}}
   /v1/merchant/shifts/current/end:
     post: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: ended}, '404': {$ref: '#/components/responses/Err'}}}
-  /v1/merchant/reports/summary: {get: {tags: [merchant], security: [{bearer: []}], parameters: [{name: from, in: query, schema: {type: string, format: date}}, {name: to, in: query, schema: {type: string, format: date}}], responses: {'200': {description: totals}}}}
-  /v1/merchant/reports/export.csv: {get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: csv}}}}
+  /v1/merchant/reports/summary: {get: {tags: [merchant], security: [{bearer: []}], summary: Totals for a period with the ledger cross-check. Staff see their own bills and earnings., parameters: [{name: from, in: query, schema: {type: string, format: date}, description: 'SAST date, default today'}, {name: to, in: query, schema: {type: string, format: date}, description: 'SAST date, default from; at most 366 days'}], responses: {'200': {description: totals, content: {application/json: {schema: {$ref: '#/components/schemas/ReportSummary'}}}}, '422': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/reports/export.csv: {get: {tags: [merchant], security: [{bearer: []}], summary: One row per payment (manager). Amounts in rand with a dot; formula cells neutralised., parameters: [{name: from, in: query, schema: {type: string, format: date}, description: 'SAST date, default today'}, {name: to, in: query, schema: {type: string, format: date}, description: 'SAST date, default from; at most 366 days'}], responses: {'200': {description: csv, content: {text/csv: {schema: {type: string}}}}, '403': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/business:
+    get: {tags: [merchant], security: [{bearer: []}], summary: Business details for slips and tax invoices (manager), responses: {'200': {description: details, content: {application/json: {schema: {$ref: '#/components/schemas/Business'}}}}}}
+    patch: {tags: [merchant], security: [{bearer: []}], summary: Change business details. VAT registration needs a VAT number (10 digits, starts with 4) and an address., requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Business'}}}}, responses: {'200': {description: saved}, '422': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/services/all: {get: {tags: [merchant], security: [{bearer: []}], summary: All services including hidden ones (manager), responses: {'200': {description: list}}}}
+  /v1/merchant/services/{id}:
+    patch: {tags: [merchant], security: [{bearer: []}], summary: Rename, reprice or hide a service (manager). Existing bills keep their price., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {name: {type: string}, priceCents: {type: integer, minimum: 0}, active: {type: boolean}}}}}}, responses: {'200': {description: saved}, '404': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/staff/{id}:
+    patch: {tags: [merchant], security: [{bearer: []}], summary: Rename, change role or deactivate (manager; owners only by an owner; not yourself), parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {name: {type: string}, role: {type: string, enum: [staff, manager, owner]}, active: {type: boolean}}}}}}, responses: {'200': {description: saved}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/payments/{id}/receipt:
+    post: {tags: [merchant], security: [{bearer: []}], summary: Revoke the receipt link, or reissue it under a new token (manager). The old link stops working either way., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, required: [action], properties: {action: {type: string, enum: [revoke, reissue]}}}}}}, responses: {'200': {description: done, content: {application/json: {schema: {type: object, properties: {receiptUrl: {type: [string, 'null']}}}}}}, '404': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/devices:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
     post: {tags: [merchant], security: [{bearer: []}], summary: Register push subscription, responses: {'201': {description: ok}}}

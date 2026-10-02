@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { formatRands, cents, WebhookSignatureError, type PaymentProvider } from "@tappay/core";
+import { randomBytes } from "node:crypto";
+import { formatRands, cents, vatIncluded, WebhookSignatureError, type PaymentProvider } from "@tappay/core";
 import type { Config } from "@tappay/config";
 import { finishWebhookEvent, receiptView, recordWebhookEvent, type Crypto, type DbHandle } from "@tappay/db";
 import { MockPaymentProvider, type MockOutcome } from "@tappay/providers";
-import { methodLabel, renderSlipPng, type SlipData } from "@tappay/slip";
+import { methodLabel, renderSlipPdf, renderSlipPng, type SlipData } from "@tappay/slip";
 import { parseInbound, SimWhatsAppClient, verifyMetaSignature } from "@tappay/whatsapp";
 import type { PayFlow } from "./flow.js";
 
@@ -22,6 +23,56 @@ function page(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:420px;margin:0 auto;padding:24px;color:#111827}button{font:inherit;padding:12px 16px;border-radius:10px;border:0;margin:6px 0;width:100%;cursor:pointer}.ok{background:#0f766e;color:#fff}.alt{background:#e5e7eb}img{max-width:100%}</style></head><body>${body}</body></html>`;
 }
 
+/**
+ * The web receipt (MESSAGES "Slip"): the slip feeds out of a printer slot. The sound is off
+ * until the customer turns it on (browsers block sound before a tap anyway); motion is skipped
+ * for people who ask for reduced motion. Strict CSP with a per-response nonce.
+ */
+function receiptPage(i: { token: string; number: string; merchant: string; vat: boolean; nonce: string }): string {
+  const t = esc(i.token);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Receipt ${esc(i.number)}</title>
+<style nonce="${i.nonce}">
+body{font:16px/1.5 system-ui,sans-serif;max-width:420px;margin:0 auto;padding:24px 16px;color:#111827;background:#f3f4f6}
+.printer{position:relative;background:#1f2937;border-radius:14px 14px 4px 4px;height:22px;box-shadow:0 2px 0 #111827}
+.slot{position:absolute;left:12px;right:12px;bottom:4px;height:5px;background:#030712;border-radius:3px}
+.paper{overflow:hidden;margin:0 14px}
+.paper img{display:block;width:100%;box-shadow:0 6px 18px rgba(0,0,0,.12);animation:feed 2.4s steps(30,end) both}
+@keyframes feed{from{transform:translateY(-100%)}to{transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){.paper img{animation:none}}
+.actions{display:flex;gap:8px;margin-top:16px}
+.actions a,.actions button{flex:1;text-align:center;font:inherit;font-size:15px;padding:12px;border-radius:10px;border:0;background:#e5e7eb;color:#111827;text-decoration:none;cursor:pointer}
+.actions a{background:#0f766e;color:#fff}
+p.note{font-size:14px;color:#4b5563}
+</style></head><body>
+<div class="printer"><div class="slot"></div></div>
+<div class="paper"><img id="slip" alt="Receipt ${esc(i.number)} from ${esc(i.merchant)}" src="/r/${t}/slip.png"></div>
+<div class="actions"><a href="/r/${t}/slip.pdf">Save PDF</a><button id="again" type="button">Print again</button><button id="sound" type="button" aria-pressed="false">Sound off</button></div>
+${i.vat ? `<p class="note">Need a tax invoice? Reply INVOICE to us on WhatsApp.</p>` : ""}
+<script nonce="${i.nonce}">
+(() => {
+  const img = document.getElementById("slip"), btn = document.getElementById("sound");
+  let on = false; try { on = localStorage.getItem("tp.receiptSound") === "on"; } catch {}
+  let ctx = null;
+  const show = () => { btn.textContent = on ? "Sound on" : "Sound off"; btn.setAttribute("aria-pressed", String(on)); };
+  // A dot-matrix chatter: short bursts of filtered noise while the paper feeds.
+  const chatter = () => {
+    if (!on) return;
+    try {
+      ctx = ctx || new AudioContext();
+      const len = ctx.sampleRate * 2.4, buf = ctx.createBuffer(1, len, ctx.sampleRate), data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (Math.floor(i / (ctx.sampleRate / 25)) % 2 ? 0.35 : 0.05);
+      const src = ctx.createBufferSource(), f = ctx.createBiquadFilter();
+      f.type = "bandpass"; f.frequency.value = 2200; src.buffer = buf; src.connect(f); f.connect(ctx.destination); src.start();
+    } catch {}
+  };
+  const print = () => { img.style.animation = "none"; void img.offsetWidth; img.style.animation = ""; chatter(); };
+  btn.onclick = () => { on = !on; try { localStorage.setItem("tp.receiptSound", on ? "on" : "off"); } catch {} show(); if (on) print(); };
+  document.getElementById("again").onclick = print;
+  show();
+})();
+</script></body></html>`;
+}
+
 const NOT_VERIFIED = page("Payment unavailable", "<h1>Payment unavailable</h1><p>We could not verify this tag. Please ask staff to take payment another way.</p>");
 
 type ReceiptView = NonNullable<Awaited<ReturnType<typeof receiptView>>>;
@@ -37,7 +88,7 @@ export function slipData(v: ReceiptView, product: string): SlipData {
     merchant: v.merchantName,
     receiptNumber: v.number,
     reference: v.paymentId.slice(0, 8),
-    paidAt: v.paidAt,
+    paidAt: v.paidAt ?? v.issuedAt,
     lines: v.shareLabel
       ? [{ description: v.shareLabel, amount: cents(v.base ?? 0) }]
       : (v.lines ?? []).map((l) => ({ description: l.description, amount: cents(l.amountCents * (l.quantity ?? 1)) })),
@@ -46,6 +97,7 @@ export function slipData(v: ReceiptView, product: string): SlipData {
     total: cents(v.total),
     method: methodLabel(v.method),
     staff: v.tip > 0 ? v.staffName : null,
+    vat: v.vatRegistered && v.vatNumber ? { number: v.vatNumber, amount: vatIncluded(cents(v.base ?? 0)) } : null,
   };
 }
 
@@ -189,25 +241,52 @@ document.querySelectorAll("button").forEach(b => b.onclick = async () => {
     reply.type("text/html").send(page("Payment", "<h1>Thank you</h1><p>Return to WhatsApp. Your slip arrives there once the payment is confirmed.</p>")),
   );
 
-  // ── Receipts (unguessable token) ───────────────────────────────────────────
+  // ── Receipts (unguessable token, revocable) ─────────────────────────────────
   const receiptToken = /^[A-Za-z0-9_-]{32}$/;
+  const lookup = (t: string) => (receiptToken.test(t) ? receiptView(d.db.db, t) : Promise.resolve(undefined));
+  const notFound = page("Receipt", "<h1>Receipt not found</h1><p>This link is not valid any more. Ask the business for a new one.</p>");
+  // Receipts are personal: never cached by shared caches, never leaked in a Referer.
+  const privateHeaders = { "cache-control": "private, no-store", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" };
+
   app.get<{ Params: { token: string } }>("/r/:token", async (req, reply) => {
     const t = req.params.token;
-    const v = receiptToken.test(t) ? await receiptView(d.db.db, t) : undefined;
-    if (!v) return reply.code(404).type("text/html").send(page("Receipt", "<h1>Receipt not found</h1>"));
+    const v = await lookup(t);
+    if (!v) return reply.code(404).type("text/html").send(notFound);
+    const nonce = randomBytes(16).toString("base64");
     return reply
-      .header("cache-control", "private, no-store")
-      .header("referrer-policy", "no-referrer")
+      .headers(privateHeaders)
+      .header("content-security-policy", `default-src 'none'; img-src 'self'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`)
       .type("text/html")
-      .send(page(`Receipt ${v.number}`, `<img alt="Receipt ${esc(v.number)} from ${esc(v.merchantName)}" src="/r/${t}/slip.png">`));
+      .send(receiptPage({ token: t, number: v.number, merchant: v.merchantName, vat: Boolean(v.vatRegistered && v.vatNumber), nonce }));
   });
 
   app.get<{ Params: { token: string } }>("/r/:token/slip.png", async (req, reply) => {
-    const t = req.params.token;
-    const v = receiptToken.test(t) ? await receiptView(d.db.db, t) : undefined;
+    const v = await lookup(req.params.token);
     if (!v) return reply.code(404).send({ code: "not_found", message: "receipt not found" });
     const png = await renderSlipPng(slipData(v, config.PRODUCT_NAME));
-    return reply.header("cache-control", "private, max-age=3600").type("image/png").send(png);
+    return reply.headers(privateHeaders).type("image/png").send(png);
+  });
+
+  app.get<{ Params: { token: string } }>("/r/:token/slip.pdf", async (req, reply) => {
+    const v = await lookup(req.params.token);
+    if (!v) return reply.code(404).send({ code: "not_found", message: "receipt not found" });
+    const pdf = await renderSlipPdf(await renderSlipPng(slipData(v, config.PRODUCT_NAME)), `Receipt ${v.number}`);
+    return reply
+      .headers(privateHeaders)
+      .header("content-disposition", `attachment; filename="receipt-${v.number.replace(/[^A-Za-z0-9-]/g, "")}.pdf"`)
+      .type("application/pdf")
+      .send(pdf);
+  });
+
+  // Tax invoices (SPEC 14): a separate unguessable token per issued invoice.
+  app.get<{ Params: { token: string } }>("/i/:token", async (req, reply) => {
+    const pdf = receiptToken.test(req.params.token) ? await flow.taxInvoicePdf(req.params.token) : null;
+    if (!pdf) return reply.code(404).type("text/html").send(page("Tax invoice", "<h1>Tax invoice not found</h1>"));
+    return reply
+      .headers(privateHeaders)
+      .header("content-disposition", `inline; filename="tax-invoice-${pdf.number}.pdf"`)
+      .type("application/pdf")
+      .send(pdf.body);
   });
 
   // ── Simulator outbox (WA_MODE=sim only; config forbids sim in production) ──

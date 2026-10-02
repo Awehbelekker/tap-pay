@@ -517,11 +517,12 @@ export async function lockPaymentByProviderRef(trx: Transaction<Database>, provi
 export async function settlePayment(
   db: Db,
   paymentId: string,
-  i: { status: "succeeded" | "failed" | "cancelled"; method: string | null; fee: number | null },
+  i: { status: "succeeded" | "failed" | "cancelled"; method: string | null; fee: number | null; at?: Date },
 ): Promise<boolean> {
+  const at = i.at ?? new Date();
   const r = await db
     .updateTable("payments")
-    .set({ status: i.status, method: i.method, provider_fee_cents: i.fee, updated_at: new Date() })
+    .set({ status: i.status, method: i.method, provider_fee_cents: i.fee, updated_at: at, ...(i.status === "succeeded" ? { paid_at: at } : {}) })
     .where("id", "=", paymentId)
     // Success may arrive after a failure/cancel notice for the same checkout; nothing else moves.
     .where("status", "in", i.status === "succeeded" ? ["pending", "failed", "cancelled"] : ["pending"])
@@ -594,14 +595,20 @@ export async function receiptView(db: Db, token: string) {
       "payments.id as paymentId",
       "payments.amount_cents as total",
       "payments.method",
-      "payments.updated_at as paidAt",
+      "payments.paid_at as paidAt",
       "sessions.base_cents as base",
       "sessions.tip_cents as tip",
       "merchants.name as merchantName",
+      "merchants.trading_name as tradingName",
+      "merchants.vat_registered as vatRegistered",
+      "merchants.vat_number as vatNumber",
       "bills.lines as lines",
       "users.display_name as staffName",
+      "receipts.created_at as issuedAt",
+      "receipts.merchant_id as merchantId",
     ])
     .where("receipts.receipt_token", "=", token)
+    .where("receipts.revoked_at", "is", null)
     .executeTakeFirst();
 }
 
@@ -708,8 +715,8 @@ export async function todaySummary(db: Db, merchantId: string, onlyUserId: strin
       eb.fn.coalesce(eb.fn.sum<number>("sessions.tip_cents"), eb.lit(0)).as("tips"),
     ])
     .where("payments.merchant_id", "=", merchantId)
-    .where("payments.status", "=", "succeeded")
-    .where("payments.updated_at", ">=", start);
+    .where("payments.status", "in", ["succeeded", "partially_refunded", "refunded"])
+    .where("payments.paid_at", ">=", start);
   if (onlyUserId) {
     const uid = onlyUserId;
     q = q.where((eb) => eb.or([eb("bills.created_by", "=", uid), eb("bills.assigned_user_id", "=", uid)]));

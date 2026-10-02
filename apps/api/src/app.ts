@@ -10,6 +10,8 @@ import { PayFlow } from "./flow.js";
 import { registerMerchantApi } from "./merchantApi.js";
 import { Money } from "./money.js";
 import { registerMoneyApi } from "./moneyApi.js";
+import { registerDashboardApi } from "./dashboardApi.js";
+import { Reports } from "./reports.js";
 import { Notifier } from "./notifier.js";
 import { DisabledPushClient, WebPushClient } from "./push.js";
 import { loggerOptions } from "./logger.js";
@@ -88,6 +90,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const money = new Money({ config, db: deps.db.db, crypto: crypto_, provider: adapters.provider, clock, log: app.log, alerts: notifier });
   const flow = new PayFlow({ config, db: deps.db.db, crypto: crypto_, wa: adapters.wa, provider: adapters.provider, clock, log: app.log, events: notifier, money });
   const auth = new Auth({ config, db: deps.db.db, crypto: crypto_, wa: adapters.wa, clock });
+  const reports = new Reports({ db: deps.db.db, crypto: crypto_, clock, log: app.log, notifier });
 
   // Live events: one LISTEN connection per API process, started on the first SSE subscriber.
   const listeners = new Map<string, Set<(id: number) => void>>();
@@ -111,12 +114,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   registerMerchantApi(app, { config, db: deps.db.db, crypto: crypto_, auth, flow, clock, subscribe, vapidPublicKey: config.VAPID_PUBLIC_KEY ?? null });
   registerMoneyApi(app, { config, db: deps.db.db, crypto: crypto_, auth, money, clock });
+  registerDashboardApi(app, { config, db: deps.db.db, crypto: crypto_, auth, clock, reports });
   registerRoutes(app, { config: deps.config, db: deps.db, crypto: crypto_, flow, provider: adapters.provider, wa: adapters.wa });
   // The merchant API (M4) authenticates and then calls these flow methods; tests use them directly.
   app.decorate("payFlow", flow);
   app.decorate("auth", auth);
   app.decorate("money", money);
   app.decorate("notifier", notifier);
+  app.decorate("reports", reports);
 
   return app;
 }

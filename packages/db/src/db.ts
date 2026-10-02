@@ -48,6 +48,8 @@ export interface MerchantsTable {
   fee_policy: Generated<"proportional" | "merchant_absorbs">;
   platform_fee_bp: Generated<number>;
   platform_fee_cents: Generated<number>;
+  address: Generated<string | null>;
+  invoice_seq: Generated<number>;
   created_at: Generated<Date>;
 }
 
@@ -124,7 +126,7 @@ export interface BillsTable {
   intended_msisdn_enc: Buffer | null;
   customer_id: string | null;
   claimed_at: Date | null;
-  paid_at: Date | null;
+  paid_at: Generated<Date | null>;
   expires_at: Date;
   shift_id: string | null;
   version: Generated<number>;
@@ -194,6 +196,7 @@ export interface PaymentsTable {
   raw: ColumnType<unknown, string | null, string | null> | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
+  paid_at: Date | null;
 }
 
 export interface LedgerEntriesTable {
@@ -220,6 +223,7 @@ export interface ReceiptsTable {
   tax_invoice: Generated<boolean>;
   image_key: string | null;
   created_at: Generated<Date>;
+  revoked_at: Generated<Date | null>;
 }
 
 export interface WebhookEventsTable {
@@ -379,6 +383,22 @@ export interface RefundsTable {
   settled_at: Date | null;
 }
 
+export interface TaxInvoicesTable {
+  id: Generated<string>;
+  merchant_id: string;
+  payment_id: string;
+  customer_id: string;
+  status: Generated<"awaiting_details" | "issued" | "expired">;
+  number: string | null;
+  buyer_name: string | null;
+  buyer_vat: string | null;
+  buyer_address: string | null;
+  token: string | null;
+  expires_at: Date;
+  created_at: Generated<Date>;
+  issued_at: Date | null;
+}
+
 export interface Database {
   split_rules: SplitRulesTable;
   shifts: ShiftsTable;
@@ -404,6 +424,7 @@ export interface Database {
   payments: PaymentsTable;
   ledger_entries: LedgerEntriesTable;
   receipts: ReceiptsTable;
+  tax_invoices: TaxInvoicesTable;
   webhook_events: WebhookEventsTable;
   message_log: MessageLogTable;
   audit_log: AuditLogTable;

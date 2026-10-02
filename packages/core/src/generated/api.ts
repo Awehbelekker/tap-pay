@@ -156,7 +156,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Receipt page and PNG */
+        /** Receipt page (slip with print animation, sound toggle, PDF link). Private, no-store, strict CSP. 404 for unknown or revoked tokens. */
         get: {
             parameters: {
                 query?: never;
@@ -173,7 +173,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "text/html": string;
+                    };
                 };
                 404: components["responses"]["Err"];
             };
@@ -212,6 +214,84 @@ export interface paths {
                     };
                     content: {
                         "image/png": string;
+                    };
+                };
+                404: components["responses"]["Err"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/r/{receiptToken}/slip.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The slip as a PDF (download) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    receiptToken: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description PDF */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/pdf": string;
+                    };
+                };
+                404: components["responses"]["Err"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/i/{invoiceToken}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An issued tax invoice (PDF). The customer gets the link on WhatsApp after replying INVOICE. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    invoiceToken: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description PDF */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/pdf": string;
                     };
                 };
                 404: components["responses"]["Err"];
@@ -1175,6 +1255,7 @@ export interface paths {
             };
         };
         put?: never;
+        /** Add a service (manager) */
         post: {
             parameters: {
                 query?: never;
@@ -1182,7 +1263,14 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name: string;
+                        priceCents: number;
+                    };
+                };
+            };
             responses: {
                 /** @description created */
                 201: {
@@ -1225,7 +1313,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Invite staff by number */
+        /** Add staff by WhatsApp number (manager). They sign in with a WhatsApp code; only an owner adds an owner. */
         post: {
             parameters: {
                 query?: never;
@@ -1233,15 +1321,27 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name: string;
+                        msisdn: string;
+                        /** @enum {string} */
+                        role?: "staff" | "manager" | "owner";
+                    };
+                };
+            };
             responses: {
-                /** @description invited */
+                /** @description added */
                 201: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                403: components["responses"]["Err"];
+                409: components["responses"]["Err"];
+                422: components["responses"]["Err"];
             };
         };
         delete?: never;
@@ -1851,10 +1951,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Totals for a period with the ledger cross-check. Staff see their own bills and earnings. */
         get: {
             parameters: {
                 query?: {
+                    /** @description SAST date, default today */
                     from?: string;
+                    /** @description SAST date, default from; at most 366 days */
                     to?: string;
                 };
                 header?: never;
@@ -1868,8 +1971,11 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ReportSummary"];
+                    };
                 };
+                422: components["responses"]["Err"];
             };
         };
         put?: never;
@@ -1887,9 +1993,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** One row per payment (manager). Amounts in rand with a dot; formula cells neutralised. */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description SAST date, default today */
+                    from?: string;
+                    /** @description SAST date, default from; at most 366 days */
+                    to?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -1901,12 +2013,249 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
+                    content: {
+                        "text/csv": string;
+                    };
+                };
+                403: components["responses"]["Err"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/business": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Business details for slips and tax invoices (manager) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Business"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change business details. VAT registration needs a VAT number (10 digits */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Business"];
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                422: components["responses"]["Err"];
+            };
+        };
+        trace?: never;
+    };
+    "/v1/merchant/services/all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All services including hidden ones (manager) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
                     content?: never;
                 };
             };
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/services/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        priceCents?: number;
+                        active?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Err"];
+            };
+        };
+        trace?: never;
+    };
+    "/v1/merchant/staff/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        /** @enum {string} */
+                        role?: "staff" | "manager" | "owner";
+                        active?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                403: components["responses"]["Err"];
+                404: components["responses"]["Err"];
+                409: components["responses"]["Err"];
+            };
+        };
+        trace?: never;
+    };
+    "/v1/merchant/payments/{id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke the receipt link */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        action: "revoke" | "reissue";
+                    };
+                };
+            };
+            responses: {
+                /** @description done */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            receiptUrl?: string | null;
+                        };
+                    };
+                };
+                404: components["responses"]["Err"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -2248,6 +2597,8 @@ export interface components {
             /** Format: date-time */
             paidAt: string;
             maskedCustomer?: string | null;
+            /** @description null when the link was revoked */
+            receiptUrl?: string | null;
         };
         /** @description Ledger totals for one party (signed cents). balanceCents is what is owed now. */
         Balance: {
@@ -2297,6 +2648,57 @@ export interface components {
             /** Format: uuid */
             staffUserId: string | null;
             basisPoints: number;
+        };
+        Business: {
+            name?: string;
+            tradingName?: string | null;
+            vatRegistered?: boolean;
+            vatNumber?: string | null;
+            address?: string | null;
+        };
+        ReportSummary: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            count: number;
+            grossCents: number;
+            baseCents?: number;
+            tipCents: number;
+            feeCents: number;
+            refundCount?: number;
+            refundCents: number;
+            netCents: number;
+            /** @description The same totals summed from the ledger agree */
+            reconciled: boolean;
+            ledger: {
+                creditsCents?: number;
+                feeCents?: number;
+                refundCents?: number;
+            };
+            byDay: {
+                /** Format: date */
+                date?: string;
+                count?: number;
+                grossCents?: number;
+                tipCents?: number;
+            }[];
+            byParty: {
+                partyKind?: string;
+                userId?: string | null;
+                name?: string | null;
+                salesCents?: number;
+                tipCents?: number;
+                feeCents?: number;
+                refundCents?: number;
+                netCents?: number;
+            }[];
+            byService: {
+                serviceId?: string | null;
+                name?: string;
+                count?: number;
+                amountCents?: number;
+            }[];
         };
         MerchantSettings: {
             tipsEnabled?: boolean;

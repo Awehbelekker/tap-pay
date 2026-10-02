@@ -10,7 +10,7 @@ HTTP and receive signed `bill.paid` events, and every external system sits behin
 
 ## Status
 
-**M0 to M5 done.** A customer can tap a static tag or open a bill link, claim the bill in
+**M0 to M6 done.** A customer can tap a static tag or open a bill link, claim the bill in
 WhatsApp (simulator), choose a tip, pay through the mock hosted checkout and get a branded
 slip. All six merchant modes work: appointment (number match, 4-digit code), counter (first
 tap, or the customer types the amount), table (split into shares), quick tip, field and remote
@@ -20,8 +20,11 @@ code and PIN, create bills (QR, WhatsApp link, bill code), see them go to Paid l
 tags (NFC on Android or typed), alerts by push or WhatsApp, opens offline. Money: split rules
 (per merchant or service), tip direct, pooled by shift or with a house cut, card fees shared or
 absorbed, full and partial refunds that reverse the split, chargebacks, staff balances, and a
-daily payout run (manual "mark paid" or through the provider). Next: M6 dashboard, receipts and
-tax invoices. See `docs/MILESTONES.md`.
+daily payout run (manual "mark paid" or through the provider). Dashboard: reports that
+reconcile with the ledger, CSV export, business and VAT details, services and staff; a web
+receipt that prints out (with PDF), revocable links, VAT on slips, tax invoices on request over
+WhatsApp, and a morning summary for managers. Next: M7 unpaid bills and reminders. See
+`docs/MILESTONES.md`.
 
 Try it by hand after the quick start: `pnpm demo:bill`, open http://localhost:4000, press
 **Tap tag**, then **Send**.

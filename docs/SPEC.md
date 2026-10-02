@@ -211,6 +211,8 @@ Channel order: PWA live stream (SSE) → Web Push → WhatsApp (template if outs
 - Slip shows: merchant name and logo, service, bill, tip, total, method, date, reference, split not shown to customer.
 - Tax invoice on request: customer sends company name and VAT number; system generates a PDF with the merchant's VAT number and required fields. Format needs legal/accounting confirmation.
 - Slip print animation is a UI nicety in the PWA preview only.
+- As built (M6): `/r/<token>` is a web page where the slip feeds out of a printer slot (skipped under reduced motion), with "Save PDF" (`/r/<token>/slip.pdf`), "Print again" and a sound toggle that is off until the customer turns it on. Tokens are 24 random bytes (192 bits); a manager can revoke a link or reissue it under a new token, and either way the old link answers 404 like an unknown one. Receipt responses are `private, no-store`, `no-referrer`, `noindex`, with a strict CSP and a per-response nonce. A VAT-registered merchant's slip shows its VAT number and the VAT contained in the bill (15/115, rounded half up; the tip carries none).
+- As built (M6): the customer replies INVOICE on WhatsApp. Their latest payment from the last 30 days is used; if the merchant is VAT registered (number and address on file) they are asked for "company name, VAT number[, address]" (address required over R5 000, the full tax invoice limit). The invoice gets the merchant's next number (`INV-000001`, gapless, per merchant) and is sent as a PDF document behind `/i/<token>`. One invoice per payment: asking again resends it. The PDF shows "Tax Invoice", seller name, trading name, address and VAT number, buyer name, address and VAT number, number, date of issue and supply, lines (VAT inclusive), total excl. VAT, VAT at 15%, total incl. VAT, the gratuity separately with no VAT, amount paid and any refund since.
 
 ## 15. Merchant PWA (staff)
 
@@ -226,6 +228,8 @@ Installable PWA, mobile-first. Screens:
 Behaviours: SSE live updates; sound and vibration on Paid; cached service/price list (offline read); creating a bill requires a connection; installable; push subscription management. Optional on Android Chrome only: write a per-sale URL to a blank tag with Web NFC (feature-detected, hidden elsewhere).
 
 ## 16. Manager dashboard
+
+As built (M6), in the PWA for managers: Business (registered and trading name, VAT registration, VAT number, address; services add, reprice, hide; staff add by number, make manager or staff, deactivate), Reports (today, yesterday, 7 days, this month: paid, tips, refunds, card fees, net, by person, what sold, by day, a "matches the ledger" check, CSV download), Money (M5), Tags (M4). Staff see Reports for their own bills and earnings. Not built yet: reminder settings (M7), audit log view (M9), receipt logo.
 
 Services and prices; staff (invite by WhatsApp number, roles, deactivate); tags (assign to person/till/table, disable, rotate, status); tip and revenue rules; reminder and notification settings; reports (day, staff, service, tips, unpaid); payments with refund action; payouts; shifts for pools; receipt branding and VAT number; audit log view.
 

@@ -72,6 +72,7 @@ import {
   type Database,
 } from "@tappay/db";
 import { isValidTagCode, waMeLink } from "@tappay/tag";
+import { TaxInvoices } from "./invoices.js";
 import { postPayment, staffShares, type Money } from "./money.js";
 import type { FlowEvents } from "./notifier.js";
 import {
@@ -154,7 +155,15 @@ export interface NewBillInput {
 }
 
 export class PayFlow {
-  constructor(private readonly d: FlowDeps) {}
+  readonly invoices: TaxInvoices;
+  constructor(private readonly d: FlowDeps) {
+    this.invoices = new TaxInvoices({ db: d.db, config: d.config, clock: d.clock });
+  }
+
+  /** The tax invoice PDF behind /i/:token. */
+  taxInvoicePdf(token: string) {
+    return this.invoices.pdf(token);
+  }
 
   private now(): Date {
     return this.d.clock.now();
@@ -242,6 +251,10 @@ export class PayFlow {
       if (token) return this.onPay(m.from, customerId, token);
       const word = m.text.trim().toUpperCase();
       if (word === "HELP") return reply(catalogue.help());
+      if (word === "INVOICE" || word === "TAX INVOICE") {
+        const r = await this.invoices.request(customerId);
+        return reply(r.msg, r.merchantId);
+      }
       if (word === "STOP" || word === "STOP ALL") {
         await optOutGlobally(db, customerId, this.now());
         await audit(db, { merchantId: null, actorKind: "customer", actorId: customerId, action: "customer.opt_out", entity: "customer", entityId: customerId });
@@ -252,6 +265,17 @@ export class PayFlow {
       if (code) {
         const prompt = await awaitingCodePrompt(db, customerId, this.now());
         if (prompt) return this.onBillCode(m.from, customerId, prompt.tag_id, code);
+      }
+    }
+
+    // The reply to "send your company name and VAT number", unless a payment is mid-way and
+    // waiting for typed input (a custom tip or an amount).
+    if (m.kind === "text") {
+      const inv = await this.invoices.pending(customerId);
+      if (inv) {
+        const s = await latestActiveSession(db, customerId);
+        const typing = s && s.expiresAt.getTime() > this.now().getTime() && (s.status === "awaiting_tip" || s.status === "awaiting_amount");
+        if (!typing) return reply(await this.invoices.details(inv, m.text), inv.merchant_id);
       }
     }
 
@@ -811,7 +835,7 @@ export class PayFlow {
           await flag(trx, p.merchantId, p.id, "payment.amount_mismatch", { expected: p.amount, received: ev.amount });
           return { kind: "error" as const, error: "amount_mismatch" };
         }
-        if (!(await settlePayment(trx, p.id, { status: "succeeded", method: ev.method ?? null, fee: ev.feeCents ?? null }))) {
+        if (!(await settlePayment(trx, p.id, { status: "succeeded", method: ev.method ?? null, fee: ev.feeCents ?? null, at: now }))) {
           return { kind: "duplicate" as const };
         }
         if (canSession(p.sessionStatus, "payment_succeeded")) {
@@ -1079,7 +1103,9 @@ export class PayFlow {
             ? await wa.sendButtons(to, msg.body, msg.buttons)
             : msg.kind === "list"
               ? await wa.sendList(to, msg.body, msg.buttonLabel, msg.rows)
-              : await wa.sendImage(to, msg.imageUrl, msg.caption);
+              : msg.kind === "image"
+                ? await wa.sendImage(to, msg.imageUrl, msg.caption)
+                : await wa.sendDocument(to, msg.documentUrl, msg.filename, msg.caption);
       await logMessage(db, { customerId, merchantId, direction: "out", waMessageId: r.messageId, kind: msg.kind });
     } catch (e) {
       // notify.retry picks these up once notifications land (M4). Never log the number.

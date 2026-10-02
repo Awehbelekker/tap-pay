@@ -56,7 +56,8 @@ export type SimMessage =
   | { kind: "buttons"; to: string; id: string; body: string; buttons: WaButton[] }
   | { kind: "list"; to: string; id: string; body: string; buttonLabel: string; rows: WaListRow[] }
   | { kind: "template"; to: string; id: string; template: string; lang: string; params: string[] }
-  | { kind: "image"; to: string; id: string; imageUrl: string; caption?: string };
+  | { kind: "image"; to: string; id: string; imageUrl: string; caption?: string }
+  | { kind: "document"; to: string; id: string; documentUrl: string; filename: string; caption?: string };
 
 /**
  * In-memory simulator client. Enforces the same limits the Cloud client will, so a message that
@@ -101,6 +102,12 @@ export class SimWhatsAppClient implements WhatsAppClient {
     const m: SimMessage = caption === undefined
       ? { kind: "image", to, id: this.id(), imageUrl }
       : { kind: "image", to, id: this.id(), imageUrl, caption };
+    return this.push(m);
+  }
+
+  async sendDocument(to: string, documentUrl: string, filename: string, caption?: string): Promise<WaSendResult> {
+    if (caption !== undefined) assertBody(caption);
+    const m: SimMessage = caption === undefined ? { kind: "document", to, id: this.id(), documentUrl, filename } : { kind: "document", to, id: this.id(), documentUrl, filename, caption };
     return this.push(m);
   }
 

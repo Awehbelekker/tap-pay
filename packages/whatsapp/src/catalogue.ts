@@ -12,7 +12,8 @@ export type OutMessage =
   | { kind: "text"; body: string }
   | { kind: "buttons"; body: string; buttons: WaButton[] }
   | { kind: "list"; body: string; buttonLabel: string; rows: WaListRow[] }
-  | { kind: "image"; imageUrl: string; caption: string };
+  | { kind: "image"; imageUrl: string; caption: string }
+  | { kind: "document"; documentUrl: string; filename: string; caption: string };
 
 /** Interactive reply ids. Handlers switch on these, never on titles. */
 export const IDS = {
@@ -257,6 +258,43 @@ export const catalogue = {
   },
 
   help(): OutMessage {
-    return { kind: "text", body: "To pay, tap the merchant's tag and send the message that opens. Reply STOP to stop reminders." };
+    return { kind: "text", body: "To pay, tap the merchant's tag and send the message that opens. Reply INVOICE for a tax invoice for your last payment. Reply STOP to stop reminders." };
+  },
+
+  // ── Tax invoices (SPEC 14) ─────────────────────────────────────────────────
+
+  invoiceAsk(i: { merchant: string; total: Cents; date: string }): OutMessage {
+    return {
+      kind: "text",
+      body: `Tax invoice for your payment of ${R(i.total)} to ${i.merchant} on ${i.date}. Reply with your company name and VAT number, for example:\nAcme (Pty) Ltd, 4123456789\nAdd your address after another comma if you want it on the invoice.`,
+    };
+  },
+
+  invoiceAskAgain(): OutMessage {
+    return { kind: "text", body: "I need a company name and a 10-digit VAT number starting with 4, for example:\nAcme (Pty) Ltd, 4123456789" };
+  },
+
+  invoiceNeedAddress(): OutMessage {
+    return { kind: "text", body: "Over R5 000 the invoice must show your address too. Reply with name, VAT number and address, for example:\nAcme (Pty) Ltd, 4123456789, 1 Main Rd, Cape Town" };
+  },
+
+  invoiceNone(): OutMessage {
+    return { kind: "text", body: "I can make a tax invoice for a payment from this number in the last 30 days, and I could not find one." };
+  },
+
+  invoiceNotVat(i: { merchant: string }): OutMessage {
+    return { kind: "text", body: `${i.merchant} is not registered for VAT, so they cannot issue a tax invoice. Your slip is your receipt.` };
+  },
+
+  invoiceTipOnly(): OutMessage {
+    return { kind: "text", body: "That payment was a tip, which has no VAT, so there is no tax invoice for it." };
+  },
+
+  invoiceUnavailable(i: { merchant: string }): OutMessage {
+    return { kind: "text", body: `${i.merchant} has not finished setting up tax invoices. Please ask them directly.` };
+  },
+
+  invoiceReady(i: { merchant: string; number: string; url: string }): OutMessage {
+    return { kind: "document", documentUrl: i.url, filename: `Tax invoice ${i.number}.pdf`, caption: `Tax invoice ${i.number} from ${i.merchant}.\n${i.url}` };
   },
 };

@@ -5,7 +5,7 @@ import { createQueue, SCHEDULE_TZ, SCHEDULES } from "@tappay/db/queue";
 /**
  * Background worker (ARCHITECTURE: apps/worker). M0 installs the queues and schedules; each
  * job's handler is registered by the milestone that owns it (session.expire in M1/M2,
- * reminder.send in M7, ...). payout.run is handled in the API process (OPEN_QUESTIONS I29).
+ * reminder.send in M7, ...). payout.run and summary.daily are handled in the API process (OPEN_QUESTIONS I29).
  * Unhandled scheduled jobs simply wait.
  */
 const config = loadConfig();

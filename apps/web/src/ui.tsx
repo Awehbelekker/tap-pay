@@ -30,7 +30,7 @@ export function Field({ label, hint, ...p }: InputHTMLAttributes<HTMLInputElemen
   return (
     <label className="flex flex-col gap-1">
       <span className="text-sm font-medium text-slate-700">{label}</span>
-      <input className="min-h-12 rounded-xl border border-slate-300 px-3 text-base outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20" {...p} />
+      <input className="min-h-12 w-full min-w-0 rounded-xl border border-slate-300 px-3 text-base outline-none focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20" {...p} />
       {hint && <span className="text-xs text-slate-500">{hint}</span>}
     </label>
   );

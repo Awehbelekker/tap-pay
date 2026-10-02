@@ -181,6 +181,63 @@ test("a manager refunds part of a payment, sets the split and pays the coach's t
   await expect(page.getByLabel("Serving staff's share of each sale (%)")).toHaveValue("70");
 });
 
+test("a manager sets VAT details, services and staff, reads the reports and opens a receipt", async ({ page, context }) => {
+  await enrol(page, MANAGER, "5937");
+  await page.getByRole("button", { name: "Business" }).click();
+  const details = page.getByLabel("Business details");
+  await details.getByRole("switch").check();
+  await page.getByLabel("VAT number").fill("4123456789");
+  await page.getByRole("button", { name: "Save details" }).click();
+  await expect(page.getByRole("alert")).toHaveText("a VAT-registered business needs its VAT number and address");
+  await page.getByLabel("Business address").fill("1 Beach Rd, Muizenberg, 7945");
+  await page.getByRole("button", { name: "Save details" }).click();
+  await expect(page.getByRole("status")).toHaveText("Business details saved.");
+
+  await page.getByLabel("New service").fill("Wetsuit hire");
+  await page.getByLabel("Price (R)").fill("60");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Wetsuit hire added.");
+  await page.getByLabel("Price of Wetsuit hire").fill("75");
+  await page.locator("[data-service='Wetsuit hire']").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toHaveText("Wetsuit hire is now R75,00.");
+
+  await page.getByLabel("Name", { exact: true }).fill("Thandi");
+  await page.getByLabel("Their WhatsApp number").fill("060 000 0003");
+  await page.getByRole("button", { name: "Add staff member" }).click();
+  await expect(page.getByRole("status")).toHaveText("Thandi added. They sign in with a code sent to their WhatsApp.");
+  await expect(page.locator("[data-staff='Thandi']")).toContainText("staff · ***003");
+  await shot(page, "m6-1-business");
+
+  // Reports: the R550 payment, the R110 refund, and the ledger agrees.
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Reports" }).click();
+  const totals = page.getByLabel("Totals");
+  await expect(totals).toContainText("R550,00");
+  await expect(totals).toContainText("R110,00");
+  await expect(page.getByTestId("reconciled")).toHaveText("Matches the ledger.");
+  await expect(page.getByLabel("What sold")).toContainText("Beginner lesson");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download CSV" }).click()]);
+  expect(download.suggestedFilename()).toMatch(/^payments-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.csv$/);
+  const csv = await (await import("node:fs/promises")).readFile((await download.path())!, "utf8");
+  expect(csv).toContain("Beginner lesson");
+  expect(csv).toContain(",500.00,50.00,550.00,110.00,");
+  await shot(page, "m6-2-reports");
+
+  // The customer's receipt: the slip feeds out of the printer; sound is off until turned on.
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Money" }).click();
+  const [receipt] = await Promise.all([context.waitForEvent("page"), page.locator("[data-payment]").filter({ hasText: "Beginner lesson" }).getByRole("link", { name: "Receipt" }).click()]);
+  await expect(receipt.getByAltText(/Receipt R-\d{8}-/)).toBeVisible();
+  const sound = receipt.getByRole("button", { name: /Sound/ });
+  await expect(sound).toHaveAttribute("aria-pressed", "false");
+  await sound.click();
+  await expect(sound).toHaveText("Sound on");
+  await expect(receipt.getByText("Need a tax invoice? Reply INVOICE to us on WhatsApp.")).toBeVisible();
+  await expect(receipt.getByRole("link", { name: "Save PDF" })).toHaveAttribute("href", /\/slip\.pdf$/);
+  await receipt.waitForTimeout(2600); // let the print animation finish for the screenshot
+  await shot(receipt, "m6-3-receipt");
+});
+
 test("the app shell opens offline", async ({ page, context }) => {
   await enrol(page, COACH);
   // Wait until the service worker controls the page, so the shell is precached.

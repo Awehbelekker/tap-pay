@@ -47,6 +47,7 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
       .innerJoin("sessions", "sessions.id", "payments.session_id")
       .leftJoin("bills", "bills.id", "sessions.bill_id")
       .leftJoin("customers", "customers.id", "sessions.customer_id")
+      .leftJoin("receipts", (j) => j.onRef("receipts.payment_id", "=", "payments.id").on("receipts.revoked_at", "is", null))
       .select([
         "payments.id",
         "payments.amount_cents",
@@ -54,13 +55,14 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
         "payments.status",
         "payments.method",
         "payments.provider_fee_cents",
-        "payments.updated_at",
+        "payments.paid_at",
         "sessions.base_cents",
         "sessions.tip_cents",
         "bills.id as bill_id",
         "bills.lines",
         "bills.type",
         "customers.msisdn_enc",
+        "receipts.receipt_token",
       ])
       .where("payments.merchant_id", "=", s.merchantId)
       .where("payments.status", "in", ["succeeded", "partially_refunded", "refunded"]);
@@ -68,7 +70,7 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
       const uid = s.userId;
       q = q.where((eb) => eb.or([eb("bills.created_by", "=", uid), eb("bills.assigned_user_id", "=", uid)]));
     }
-    const rows = await q.orderBy("payments.updated_at", "desc").limit(Math.min(Number(req.query.limit ?? 50) || 50, 200)).execute();
+    const rows = await q.orderBy("payments.paid_at", "desc").limit(Math.min(Number(req.query.limit ?? 50) || 50, 200)).execute();
     return {
       items: rows.map((r) => ({
         id: r.id,
@@ -81,8 +83,9 @@ export function registerMoneyApi(app: FastifyInstance, d: MoneyApiDeps): void {
         providerFeeCents: r.provider_fee_cents,
         status: r.status,
         method: r.method,
-        paidAt: r.updated_at,
+        paidAt: r.paid_at,
         maskedCustomer: r.msisdn_enc ? maskMsisdn(crypto.decrypt(r.msisdn_enc)) : null,
+        receiptUrl: r.receipt_token ? `${d.config.PUBLIC_API_URL}/r/${r.receipt_token}` : null,
       })),
     };
   });

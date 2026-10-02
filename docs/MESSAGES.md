@@ -27,7 +27,15 @@ Meta limits to verify in M8 against current docs (design to these conservative v
 | `bill.paid.already` | Duplicate tap | "This bill is already paid. Here is your slip again." | none |
 | `share.choose` | Split bill | "Which share are you paying?" | list of shares |
 | `privacy.consent` | After first payment | "Share your number with {merchant} so they can contact you about this bill?" | Share / No thanks |
-| `help` | HELP | "Reply STOP to stop reminders. Reply TALK to message {merchant}." | none |
+| `help` | HELP | "To pay, tap the merchant's tag and send the message that opens. Reply INVOICE for a tax invoice for your last payment. Reply STOP to stop reminders." | none |
+| `invoice.ask` | INVOICE, VAT-registered merchant | "Tax invoice for your payment of R{total} to {merchant} on {date}. Reply with your company name and VAT number, for example: Acme (Pty) Ltd, 4123456789. Add your address after another comma if you want it on the invoice." | none |
+| `invoice.ask_again` | Details not understood | "I need a company name and a 10-digit VAT number starting with 4, for example: Acme (Pty) Ltd, 4123456789" | none |
+| `invoice.need_address` | Over R5 000, no address | "Over R5 000 the invoice must show your address too. Reply with name, VAT number and address, ..." | none |
+| `invoice.ready` | Issued (or asked again) | Document "Tax invoice {number}.pdf", caption "Tax invoice {number} from {merchant}." + link | none |
+| `invoice.none` | No payment in 30 days | "I can make a tax invoice for a payment from this number in the last 30 days, and I could not find one." | none |
+| `invoice.not_vat` | Merchant not registered | "{merchant} is not registered for VAT, so they cannot issue a tax invoice. Your slip is your receipt." | none |
+| `invoice.tip_only` | Last payment was a quick tip | "That payment was a tip, which has no VAT, so there is no tax invoice for it." | none |
+| `invoice.unavailable` | Registered but no address on file | "{merchant} has not finished setting up tax invoices. Please ask them directly." | none |
 | `stop.ok` | STOP | "Done. You will not get reminders from us." | none |
 | `fallback` | Unknown | "I did not understand. Tap the tag again or choose an option." | Menu |
 | `refund.notice` | Refund | "R{amount} was refunded by {merchant}. It can take a few days to show." | none |
@@ -51,6 +59,7 @@ Money parameters are sent already formatted ("R1 234,50"), so the template bodie
 | `merchant_paid_alert` | "{customer_mask} paid {base} plus {tip} tip at {merchant}. Total {total}." |
 | `merchant_failed_alert` | "Payment of {amount} failed or was abandoned at {merchant}. Open the app to follow up." |
 | `merchant_refund_alert` | "{amount} was refunded at {merchant}. Your share goes down by {share}." |
+| `merchant_daily_summary` | "{merchant}, {day}: {count} payments, {total} (tips {tips}). Refunds {refunds}. Staff owed {owed}." |
 | `staff_tip_payout` | "{amount} in tips is on its way to you from {merchant}." |
 | `otp` | "{code} is your {product} sign-in code. It expires in 10 minutes." |
 

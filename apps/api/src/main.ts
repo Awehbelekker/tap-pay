@@ -3,6 +3,7 @@ import { createDb } from "@tappay/db";
 import { createQueue } from "@tappay/db/queue";
 import { buildApp } from "./app.js";
 import type { Money } from "./money.js";
+import type { Reports } from "./reports.js";
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
@@ -15,6 +16,10 @@ const app = buildApp({ config, db, queue });
 await queue.boss.work("payout.run", async () => {
   const r = await (app as unknown as { money: Money }).money.runAllPayouts();
   app.log.info(r, "payout run");
+});
+await queue.boss.work("summary.daily", async () => {
+  const r = await (app as unknown as { reports: Reports }).reports.sendDailySummaries();
+  app.log.info(r, "daily summaries");
 });
 
 const shutdown = async (signal: string) => {

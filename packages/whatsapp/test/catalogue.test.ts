@@ -4,6 +4,7 @@ import { assertBody, assertButtons, assertRows, catalogue, IDS, parseTipId, type
 
 function assertSendable(m: OutMessage): void {
   if (m.kind === "image") return;
+  if (m.kind === "document") return assertBody(m.caption);
   assertBody(m.body);
   if (m.kind === "buttons") assertButtons(m.buttons);
   if (m.kind === "list") assertRows(m.rows);
@@ -25,6 +26,14 @@ describe("catalogue", () => {
     catalogue.tagNotVerified(),
     catalogue.fallback(),
     catalogue.help(),
+    catalogue.invoiceAsk({ merchant: "Bean and Brew Coffee, Tokai", total: cents(55000), date: "02 Oct 2026" }),
+    catalogue.invoiceAskAgain(),
+    catalogue.invoiceNeedAddress(),
+    catalogue.invoiceNone(),
+    catalogue.invoiceNotVat({ merchant: "M" }),
+    catalogue.invoiceTipOnly(),
+    catalogue.invoiceUnavailable({ merchant: "M" }),
+    catalogue.invoiceReady({ merchant: "M", number: "INV-000001", url: "https://x.test/i/abc" }),
   ];
 
   it("every message fits WhatsApp limits and has no emoji", () => {

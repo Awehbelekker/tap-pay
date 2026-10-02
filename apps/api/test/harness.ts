@@ -155,7 +155,7 @@ export class Harness {
     url: string,
     payload?: unknown,
     headers: Record<string, string> = {},
-  ): Promise<{ statusCode: number; body: string; json: () => any }> {
+  ): Promise<{ statusCode: number; body: string; headers: Record<string, string | string[] | number | undefined>; json: () => any }> {
     return this.app.inject({ method, url, headers: { authorization: `Bearer ${token}`, ...headers }, ...(payload === undefined ? {} : { payload: payload as never }) });
   }
 
