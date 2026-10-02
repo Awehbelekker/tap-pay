@@ -924,10 +924,14 @@ export class PayFlow {
       amount: total,
       description: `${s.merchantName}: ${s.billType === "quick_tip" ? "Tip" : this.describe(s)}`.slice(0, 120),
       returnUrl: `${config.PUBLIC_API_URL}/pay/return`,
+      cancelUrl: `${config.PUBLIC_API_URL}/pay/return?cancelled=1`,
       webhookUrl: `${config.PUBLIC_API_URL}/webhooks/provider/${provider.name}`,
       idempotencyKey: `${s.id}:v${s.version}`,
     });
 
+    // A form-POST provider gets a short link to our page that posts the signed form.
+    const checkoutToken = checkout.form ? newUrlToken() : null;
+    const customerUrl = checkoutToken ? `${config.PUBLIC_API_URL}/pay/c/${checkoutToken}` : checkout.url;
     const moved = await db.transaction().execute(async (trx) => {
       const expiresAt = new Date(Math.max(s.expiresAt.getTime(), checkout.expiresAt.getTime()));
       if (!(await transitionSession(trx, s.id, "awaiting_confirm", "pay_now", { expires_at: expiresAt }))) return false;
@@ -938,8 +942,10 @@ export class PayFlow {
         providerRef: checkout.providerRef,
         idempotencyKey: `${s.id}:v${s.version}`,
         amount: total,
-        checkoutUrl: checkout.url,
+        checkoutUrl: customerUrl,
         checkoutExpiresAt: checkout.expiresAt,
+        checkoutToken,
+        checkoutForm: checkout.form ?? null,
       });
       return true;
     });
@@ -948,7 +954,7 @@ export class PayFlow {
     const minutes = Math.max(1, Math.round((checkout.expiresAt.getTime() - this.now().getTime()) / MINUTE));
     const m = await db.selectFrom("merchants").select("reminder_count").where("id", "=", s.merchantId).executeTakeFirstOrThrow();
     const remind = m.reminder_count > 0 && s.billType !== "quick_tip" && !(await optedOut(db, customerId, s.merchantId));
-    return this.send(to, customerId, s.merchantId, catalogue.payLink({ merchant: s.merchantName, total, url: checkout.url, minutes, remind }));
+    return this.send(to, customerId, s.merchantId, catalogue.payLink({ merchant: s.merchantName, total, url: customerUrl, minutes, remind }));
   }
 
   // ── Provider events ────────────────────────────────────────────────────────
@@ -981,7 +987,7 @@ export class PayFlow {
           await flag(trx, p.merchantId, p.id, "payment.amount_mismatch", { expected: p.amount, received: ev.amount });
           return { kind: "error" as const, error: "amount_mismatch" };
         }
-        if (!(await settlePayment(trx, p.id, { status: "succeeded", method: ev.method ?? null, fee: ev.feeCents ?? null, at: now }))) {
+        if (!(await settlePayment(trx, p.id, { status: "succeeded", method: ev.method ?? null, fee: ev.feeCents ?? null, at: now, providerPaymentId: ev.providerPaymentId ?? null }))) {
           return { kind: "duplicate" as const };
         }
         if (canSession(p.sessionStatus, "payment_succeeded")) {

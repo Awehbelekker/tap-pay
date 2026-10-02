@@ -121,4 +121,5 @@ export class SimWhatsAppClient implements WhatsAppClient {
 }
 
 export * from "./catalogue.js";
+export * from "./cloud.js";
 export * from "./inbound.js";

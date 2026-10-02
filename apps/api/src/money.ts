@@ -160,7 +160,7 @@ export class Money {
     const created = await db.transaction().execute(async (trx) => {
       const p = await trx
         .selectFrom("payments")
-        .select(["id", "status", "amount_cents", "refunded_cents", "provider_ref"])
+        .select(["id", "status", "amount_cents", "refunded_cents", "provider_ref", "provider_payment_id"])
         .where("merchant_id", "=", i.merchantId)
         .where("id", "=", i.paymentId)
         .forUpdate()
@@ -183,13 +183,13 @@ export class Money {
         .returningAll()
         .executeTakeFirstOrThrow();
       await audit(trx, { merchantId: i.merchantId, actorKind: i.actorUserId ? "user" : "system", actorId: i.actorUserId, action: "refund.requested", entity: "payment", entityId: p.id, detail: { amount } });
-      return { refund: r, providerRef: p.provider_ref };
+      return { refund: r, providerRef: p.provider_ref, providerPaymentId: p.provider_payment_id };
     });
 
     // The provider call happens outside the transaction; its own idempotency key protects retries.
     let result: { providerRefundRef: string; status: "pending" | "succeeded" | "failed" };
     try {
-      result = await provider.refund({ providerRef: created.providerRef ?? "", amount: cents(created.refund.amount_cents), reason: i.reason, idempotencyKey: created.refund.id });
+      result = await provider.refund({ providerRef: created.providerRef ?? "", providerPaymentId: created.providerPaymentId, amount: cents(created.refund.amount_cents), reason: i.reason, idempotencyKey: created.refund.id });
     } catch (e) {
       this.d.log.error({ err: (e as Error).message }, "provider refund call failed");
       result = { providerRefundRef: "", status: "failed" };

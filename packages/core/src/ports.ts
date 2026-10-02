@@ -39,6 +39,8 @@ export interface CreateCheckoutInput {
   customerRef?: string;
   splits?: SplitInstruction[];
   returnUrl: string;
+  /** Where the customer lands after pressing Cancel on the provider's page (defaults to returnUrl). */
+  cancelUrl?: string;
   webhookUrl: string;
   idempotencyKey: string;
 }
@@ -47,7 +49,15 @@ export interface CheckoutResult {
   providerRef: string;
   url: string;
   expiresAt: Date;
+  /**
+   * Providers whose checkout starts with a signed form POST (PayFast): the API serves a short
+   * link to its own page that posts this form, instead of sending `url` to the customer.
+   */
+  form?: { action: string; fields: [string, string][] };
 }
+
+/** `fetch`, injectable so adapters run against recorded fakes in tests. */
+export type HttpFetch = (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
 
 export type PaymentStatus = "pending" | "succeeded" | "failed" | "cancelled" | "refunded" | "partially_refunded";
 
@@ -61,6 +71,8 @@ export interface VerifiedEvent {
   currency: "ZAR";
   method?: PaymentMethod;
   feeCents?: Cents;
+  /** The provider's own payment id when it differs from providerRef (needed to refund). */
+  providerPaymentId?: string;
   raw: unknown;
 }
 
@@ -86,14 +98,22 @@ export class WebhookSignatureError extends Error {
   }
 }
 
+/** A genuine notification that changes nothing for us (pending, setup ping): answer 200, do nothing. */
+export class WebhookIgnoredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WebhookIgnoredError";
+  }
+}
+
 export interface PaymentProvider {
   readonly name: string;
   readonly capabilities: ProviderCapabilities;
   createCheckout(i: CreateCheckoutInput): Promise<CheckoutResult>;
   /** Throws WebhookSignatureError on a bad or missing signature. */
-  verifyWebhook(i: { headers: Record<string, string | undefined>; rawBody: Buffer }): Promise<VerifiedEvent>;
+  verifyWebhook(i: { headers: Record<string, string | undefined>; rawBody: Buffer; remoteIp?: string }): Promise<VerifiedEvent>;
   getPaymentStatus(providerRef: string): Promise<PaymentStatus>;
-  refund(i: { providerRef: string; amount: Cents; reason: string; idempotencyKey: string }): Promise<RefundResult>;
+  refund(i: { providerRef: string; providerPaymentId?: string | null; amount: Cents; reason: string; idempotencyKey: string }): Promise<RefundResult>;
   createPayout?(i: { to: PayoutDestination; amount: Cents; reference: string; idempotencyKey: string }): Promise<PayoutResult>;
 }
 

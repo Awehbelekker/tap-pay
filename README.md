@@ -10,7 +10,7 @@ HTTP and receive signed `bill.paid` events, and every external system sits behin
 
 ## Status
 
-**M0 to M7 done.** A customer can tap a static tag or open a bill link, claim the bill in
+**M0 to M7 done; M8 adapters built.** A customer can tap a static tag or open a bill link, claim the bill in
 WhatsApp (simulator), choose a tip, pay through the mock hosted checkout and get a branded
 slip. All six merchant modes work: appointment (number match, 4-digit code), counter (first
 tap, or the customer types the amount), table (split into shares), quick tip, field and remote
@@ -26,7 +26,10 @@ receipt that prints out (with PDF), revocable links, VAT on slips, tax invoices 
 WhatsApp, and a morning summary for managers. Unpaid bills: a customer who leaves without
 paying gets up to 3 reminders (one a day, 08:00 to 20:00 SAST, STOP to opt out) and the bill
 lands in the merchant's Unpaid list (send reminder, resend link, paid another way, write off).
-Next: M8 real adapters (WhatsApp Cloud API, payment providers). See `docs/MILESTONES.md`.
+Real adapters: WhatsApp Cloud API, PayFast and Peach Payments (Checkout v2), built from the
+providers' own SDK code and tested against fakes and their published signature vectors
+(`docs/PROVIDER_NOTES.md`); the sandbox run with a real phone needs credentials. Next: M9
+security and compliance. See `docs/MILESTONES.md`.
 
 Try it by hand after the quick start: `pnpm demo:bill`, open http://localhost:4000, press
 **Tap tag**, then **Send**.

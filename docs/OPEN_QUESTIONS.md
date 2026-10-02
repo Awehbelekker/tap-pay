@@ -110,6 +110,10 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I38 | A reminder is marked sent before the WhatsApp call: a crash loses at most one reminder, never sends two; a failed send counts toward the cap | The cap is a promise to the customer | - |
 | I39 | Bills addressed to a number can be reminded although the customer may never have seen the "we may remind you" line (it is on the pay link message); every reminder carries STOP | The merchant addressed the bill to them; the notice in the first message would change every claim message | L2 legal |
 | I40 | Table shares are released, not abandoned, and get no reminders | A share is not tied to one person until paid | Pilot feedback |
+| I41 | Official provider docs were unreachable from the build environment; adapters follow each provider's own SDK/plugin code (signatures reproduced against their test vectors) and fakes built from the same notes. See PROVIDER_NOTES "Before going live" | The code is the strongest public source; docs check pending | Before pilot |
+| I42 | WhatsApp sends are never retried (no idempotency key at Meta); failures and delivery receipts land in message_log | A retried send could double-message a customer | M10 notify.retry design |
+| I43 | PayFast and Peach checkouts are de-duplicated per idempotency key in memory (neither has an idempotency key); the payments table's unique key is the durable guard | A second checkout is harmless: only the first is stored and sent | - |
+| I44 | Refunds call the provider once per refund row (DB idempotency); the adapters' memo only covers a retry in the same process | Neither provider takes an idempotency key on refunds | M10, if refunds move to a job |
 
 ## Schema fixes made in M0
 
@@ -124,5 +128,6 @@ Append entries as `YYYY-MM-DD, question id, decision, reason, who`.
 2026-10-02, -, Apps run TypeScript through tsx in dev and production (no build step) for M0; revisit before pilot if cold start or memory matters, Claude Code
 2026-10-02, O2, Tip step implemented as a list message (see I3), Claude Code
 2026-10-02, -, M5: ledger_only stays the default; collect_then_payout is built and tested against the mock but still refuses to start without FUNDS_FLOW_LEGAL_SIGNOFF, Claude Code
+2026-10-02, Q1, Provisional: Peach Checkout v2 as the pilot card provider, PayFast supported as the alternative; SPLIT_STRATEGY stays ledger_only (PayFast splits to one PayFast merchant only, Peach has none, collect_then_payout needs L1). Owner and legal to confirm. See PROVIDER_NOTES, Claude Code
 2026-10-02, -, M6: tax invoices are issued over WhatsApp on request (reply INVOICE) as PDFs; format to be confirmed by an accountant before the first VAT-registered pilot (L4), Claude Code
 2026-10-02, O3, Quick-tip presets are per merchant, default R5/R10/R20, shown as a list (see I9), Claude Code

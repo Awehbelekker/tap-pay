@@ -460,7 +460,18 @@ export async function activeSessionOnBill(db: Db, billId: string, customerId: st
 
 export async function insertPendingPayment(
   db: Db,
-  i: { merchantId: string; sessionId: string; provider: string; providerRef: string; idempotencyKey: string; amount: number; checkoutUrl: string; checkoutExpiresAt: Date },
+  i: {
+    merchantId: string;
+    sessionId: string;
+    provider: string;
+    providerRef: string;
+    idempotencyKey: string;
+    amount: number;
+    checkoutUrl: string;
+    checkoutExpiresAt: Date;
+    checkoutToken?: string | null;
+    checkoutForm?: { action: string; fields: [string, string][] } | null;
+  },
 ) {
   await db
     .insertInto("payments")
@@ -474,6 +485,8 @@ export async function insertPendingPayment(
       method: null,
       provider_fee_cents: null,
       raw: JSON.stringify({ checkoutUrl: i.checkoutUrl, checkoutExpiresAt: i.checkoutExpiresAt.toISOString() }),
+      checkout_token: i.checkoutToken ?? null,
+      checkout_form: i.checkoutForm ? JSON.stringify(i.checkoutForm) : null,
     })
     .onConflict((oc) => oc.column("idempotency_key").doNothing())
     .execute();
@@ -517,12 +530,19 @@ export async function lockPaymentByProviderRef(trx: Transaction<Database>, provi
 export async function settlePayment(
   db: Db,
   paymentId: string,
-  i: { status: "succeeded" | "failed" | "cancelled"; method: string | null; fee: number | null; at?: Date },
+  i: { status: "succeeded" | "failed" | "cancelled"; method: string | null; fee: number | null; at?: Date; providerPaymentId?: string | null },
 ): Promise<boolean> {
   const at = i.at ?? new Date();
   const r = await db
     .updateTable("payments")
-    .set({ status: i.status, method: i.method, provider_fee_cents: i.fee, updated_at: at, ...(i.status === "succeeded" ? { paid_at: at } : {}) })
+    .set({
+      status: i.status,
+      method: i.method,
+      provider_fee_cents: i.fee,
+      updated_at: at,
+      ...(i.status === "succeeded" ? { paid_at: at } : {}),
+      ...(i.providerPaymentId ? { provider_payment_id: i.providerPaymentId } : {}),
+    })
     .where("id", "=", paymentId)
     // Success may arrive after a failure/cancel notice for the same checkout; nothing else moves.
     .where("status", "in", i.status === "succeeded" ? ["pending", "failed", "cancelled"] : ["pending"])

@@ -60,6 +60,10 @@ export const envSchema = z
     WA_PHONE_NUMBER_ID: optional,
     WA_BUSINESS_ACCOUNT_ID: optional,
     WA_ACCESS_TOKEN: optional,
+    /** Graph API version (docs/PROVIDER_NOTES.md); bump deliberately after checking Meta's changelog. */
+    WA_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/).default("v23.0"),
+    /** Language code the message templates were approved under. */
+    WA_TEMPLATE_LANG: z.string().min(2).default("en"),
     WA_APP_SECRET: z.string().min(1),
     WA_VERIFY_TOKEN: z.string().min(1),
     /** Where tap redirects go when WA_MODE=sim (instead of wa.me). */
@@ -71,12 +75,22 @@ export const envSchema = z
     ALLOW_STATIC_TAGS: bool,
     MOCK_PROVIDER_SECRET: z.string().min(16).default("mock-provider-dev-secret"),
 
+    /** Provider test environments (PayFast sandbox, Peach testsecure). Off for real money. */
+    PROVIDER_SANDBOX: z
+      .enum(["true", "false", "1", "0"])
+      .default("true")
+      .transform((v) => v === "true" || v === "1"),
+    // Peach Payments hosted Checkout v2 (docs/PROVIDER_NOTES.md).
     PEACH_ENTITY_ID: optional,
-    PEACH_ACCESS_TOKEN: optional,
-    PEACH_WEBHOOK_SECRET: optional,
+    PEACH_CLIENT_ID: optional,
+    PEACH_CLIENT_SECRET: optional,
+    PEACH_MERCHANT_ID: optional,
+    /** Dashboard secret token: signs webhooks and refunds. */
+    PEACH_SECRET_TOKEN: optional,
     PAYFAST_MERCHANT_ID: optional,
     PAYFAST_MERCHANT_KEY: optional,
-    PAYFAST_PASSPHRASE: optional,
+    /** Letters, digits, - and _ only, so every PayFast implementation signs alike. */
+    PAYFAST_PASSPHRASE: optional.refine((v) => v === undefined || /^[A-Za-z0-9_-]{8,}$/.test(v), "at least 8 of A-Z a-z 0-9 - _"),
 
     VAPID_PUBLIC_KEY: optional,
     VAPID_PRIVATE_KEY: optional,
@@ -93,10 +107,14 @@ export const envSchema = z
       need(["WA_PHONE_NUMBER_ID", "WA_BUSINESS_ACCOUNT_ID", "WA_ACCESS_TOKEN"], "WA_MODE=cloud");
     }
     if (env.PROVIDER === "peach") {
-      need(["PEACH_ENTITY_ID", "PEACH_ACCESS_TOKEN", "PEACH_WEBHOOK_SECRET"], "PROVIDER=peach");
+      need(["PEACH_ENTITY_ID", "PEACH_CLIENT_ID", "PEACH_CLIENT_SECRET", "PEACH_MERCHANT_ID", "PEACH_SECRET_TOKEN"], "PROVIDER=peach");
     }
     if (env.PROVIDER === "payfast") {
       need(["PAYFAST_MERCHANT_ID", "PAYFAST_MERCHANT_KEY", "PAYFAST_PASSPHRASE"], "PROVIDER=payfast");
+    }
+    // Native split needs per-payment split instructions at checkout, not built yet (OPEN_QUESTIONS Q1).
+    if (env.SPLIT_STRATEGY === "native") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["SPLIT_STRATEGY"], message: "native split is not built yet (OPEN_QUESTIONS Q1); use ledger_only" });
     }
     if (env.NODE_ENV === "production") {
       for (const k of SECRET_KEYS) {
@@ -109,6 +127,9 @@ export const envSchema = z
       }
       if (env.WA_MODE === "sim") {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["WA_MODE"], message: "WhatsApp simulator is not allowed in production" });
+      }
+      if (env.PROVIDER !== "mock" && env.PROVIDER_SANDBOX && !env.PUBLIC_API_URL.includes("staging")) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["PROVIDER_SANDBOX"], message: "sandbox payments in production: set PROVIDER_SANDBOX=false (or use a staging URL)" });
       }
       // OPEN_QUESTIONS L1: collecting and paying out means holding third-party funds.
       if (env.SPLIT_STRATEGY === "collect_then_payout" && !env.FUNDS_FLOW_LEGAL_SIGNOFF) {

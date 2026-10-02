@@ -34,7 +34,7 @@ Accept: totals reconcile with ledger; receipt token unguessable and revocable.
 Open tab with intended-customer capture, abandoned detection, reminder schedule, STOP handling, merchant follow-up list, write-off, mark paid other.
 Accept: time-travel tests via `Clock`: never more than 3, never more than 1 per day, never outside 08:00 to 20:00 SAST, none after paid or STOP.
 
-## M8 Real adapters
+## M8 Real adapters (built 2026-10-02; sandbox runs pending credentials)
 Fetch current official docs for Meta WhatsApp Cloud API, Peach Payments, PayFast; write findings to `docs/PROVIDER_NOTES.md` (endpoints used, signature scheme, split and payout support, fees, limits, sandbox steps). Build adapters behind the ports and pass the shared contract test suite against sandbox credentials. Decide and record split provider (OPEN_QUESTIONS Q1).
 Accept: contract tests pass for mock and each real adapter; sandbox e2e with a real phone documented.
 

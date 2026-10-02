@@ -5,6 +5,7 @@ import { expect } from "vitest";
 import { loadConfig, type Config } from "@tappay/config";
 import { Crypto, type DbHandle } from "@tappay/db";
 import { MockPaymentProvider } from "@tappay/providers";
+import type { PaymentProvider } from "@tappay/core";
 import { FixedClock, testEnv } from "@tappay/testkit";
 import { inboundPayload, sign, type Inbound } from "@tappay/wa-sim";
 import { SimWhatsAppClient, type SimMessage } from "@tappay/whatsapp";
@@ -24,6 +25,8 @@ export class Harness {
   app!: FastifyInstance;
   wa!: SimWhatsAppClient;
   provider!: MockPaymentProvider;
+  /** A real adapter (over a fake) instead of the mock provider, for the M8 adapter e2e tests. */
+  makeProvider?: () => PaymentProvider;
   push!: MemoryPushClient;
   flow!: PayFlow;
 
@@ -41,7 +44,7 @@ export class Harness {
     this.wa = new SimWhatsAppClient();
     this.provider = new MockPaymentProvider({ secret: this.config.MOCK_PROVIDER_SECRET, publicApiUrl: this.config.PUBLIC_API_URL, clock: this.clock, checkoutTtlMinutes: 10 });
     this.push = new MemoryPushClient();
-    this.app = buildApp({ config: this.config, db: this.h, queue: { ready: async () => true }, clock: this.clock, wa: this.wa, provider: this.provider, push: this.push });
+    this.app = buildApp({ config: this.config, db: this.h, queue: { ready: async () => true }, clock: this.clock, wa: this.wa, provider: this.makeProvider ? this.makeProvider() : this.provider, push: this.push });
     await this.app.ready();
     this.flow = (this.app as unknown as { payFlow: PayFlow }).payFlow;
   }

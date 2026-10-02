@@ -3,8 +3,8 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { systemClock, type Clock, type PaymentProvider, type PushClient, type WhatsAppClient } from "@tappay/core";
 import type { Config } from "@tappay/config";
 import { Crypto, dbReady, listenMerchantEvents, type DbHandle } from "@tappay/db";
-import { MockPaymentProvider } from "@tappay/providers";
-import { SimWhatsAppClient } from "@tappay/whatsapp";
+import { MockPaymentProvider, PayFastProvider, PeachProvider } from "@tappay/providers";
+import { CloudWhatsAppClient, SimWhatsAppClient } from "@tappay/whatsapp";
 import { Auth } from "./auth.js";
 import { PayFlow } from "./flow.js";
 import { registerMerchantApi } from "./merchantApi.js";
@@ -32,14 +32,41 @@ export interface AppDeps {
   push?: PushClient;
 }
 
-/** Adapters from config. Real WhatsApp and provider adapters are built in M8 from current docs. */
+/** Adapters from config (docs/PROVIDER_NOTES.md). Config already insists on credentials. */
 export function defaultAdapters(config: Config, clock: Clock): { wa: WhatsAppClient; provider: PaymentProvider } {
-  if (config.WA_MODE !== "sim") throw new Error("WA_MODE=cloud: the Cloud API client is built in M8");
-  if (config.PROVIDER !== "mock") throw new Error(`PROVIDER=${config.PROVIDER}: real provider adapters are built in M8`);
-  return {
-    wa: new SimWhatsAppClient(),
-    provider: new MockPaymentProvider({ secret: config.MOCK_PROVIDER_SECRET, publicApiUrl: config.PUBLIC_API_URL, clock, checkoutTtlMinutes: config.SESSION_TTL_MINUTES }),
-  };
+  const wa: WhatsAppClient =
+    config.WA_MODE === "cloud"
+      ? new CloudWhatsAppClient({ phoneNumberId: config.WA_PHONE_NUMBER_ID!, accessToken: config.WA_ACCESS_TOKEN!, version: config.WA_GRAPH_VERSION, templateLang: config.WA_TEMPLATE_LANG })
+      : new SimWhatsAppClient();
+  return { wa, provider: providerFromConfig(config, clock) };
+}
+
+function providerFromConfig(config: Config, clock: Clock): PaymentProvider {
+  switch (config.PROVIDER) {
+    case "mock":
+      return new MockPaymentProvider({ secret: config.MOCK_PROVIDER_SECRET, publicApiUrl: config.PUBLIC_API_URL, clock, checkoutTtlMinutes: config.SESSION_TTL_MINUTES });
+    case "payfast":
+      return new PayFastProvider({
+        merchantId: config.PAYFAST_MERCHANT_ID!,
+        merchantKey: config.PAYFAST_MERCHANT_KEY!,
+        passphrase: config.PAYFAST_PASSPHRASE!,
+        sandbox: config.PROVIDER_SANDBOX,
+        clock,
+        checkoutTtlMinutes: config.SESSION_TTL_MINUTES,
+      });
+    case "peach":
+      return new PeachProvider({
+        entityId: config.PEACH_ENTITY_ID!,
+        clientId: config.PEACH_CLIENT_ID!,
+        clientSecret: config.PEACH_CLIENT_SECRET!,
+        merchantId: config.PEACH_MERCHANT_ID!,
+        secretToken: config.PEACH_SECRET_TOKEN!,
+        sandbox: config.PROVIDER_SANDBOX,
+        allowlistedUrl: config.PUBLIC_API_URL,
+        clock,
+        checkoutTtlMinutes: config.SESSION_TTL_MINUTES,
+      });
+  }
 }
 
 /** Build the HTTP app. Kept free of listen() so tests drive it with app.inject(). */

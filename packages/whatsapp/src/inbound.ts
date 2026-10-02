@@ -1,7 +1,7 @@
 /**
  * Parse a WhatsApp Cloud API webhook body into the messages we act on. Status callbacks and
  * unsupported message types are dropped (unsupported ones come back as kind "other" so the
- * bot can answer with the fallback message). Shape per Meta's webhook docs; re-verify in M8.
+ * bot can answer with the fallback message). Shape verified against Meta's own samples (PROVIDER_NOTES).
  */
 export type InboundMessage = {
   messageId: string;
@@ -57,6 +57,30 @@ export function parseInbound(body: unknown): InboundMessage[] {
         } else {
           out.push({ ...base, kind: "other" });
         }
+      }
+    }
+  }
+  return out;
+}
+
+/** Delivery receipts (`statuses[]`): sent, delivered, read, or failed with Meta's error code. */
+export interface InboundStatus {
+  messageId: string;
+  status: "sent" | "delivered" | "read" | "failed";
+  errorCode: number | null;
+}
+
+export function parseStatuses(body: unknown): InboundStatus[] {
+  const out: InboundStatus[] = [];
+  for (const entry of arr(obj(body)?.entry)) {
+    for (const change of arr(obj(entry)?.changes)) {
+      for (const st of arr(obj(obj(change)?.value)?.statuses)) {
+        const s = obj(st);
+        const id = str(s?.id);
+        const status = str(s?.status);
+        if (!id || !status || !["sent", "delivered", "read", "failed"].includes(status)) continue;
+        const code = Number(obj(arr(s?.errors)[0])?.code);
+        out.push({ messageId: id, status: status as InboundStatus["status"], errorCode: Number.isFinite(code) ? code : null });
       }
     }
   }

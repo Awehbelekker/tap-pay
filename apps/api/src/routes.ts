@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
-import { formatRands, cents, vatIncluded, WebhookSignatureError, type PaymentProvider } from "@tappay/core";
+import { formatRands, cents, vatIncluded, WebhookIgnoredError, WebhookSignatureError, type PaymentProvider } from "@tappay/core";
 import type { Config } from "@tappay/config";
 import { finishWebhookEvent, receiptView, recordWebhookEvent, type Crypto, type DbHandle } from "@tappay/db";
 import { MockPaymentProvider, type MockOutcome } from "@tappay/providers";
 import { methodLabel, renderSlipPdf, renderSlipPng, type SlipData } from "@tappay/slip";
-import { parseInbound, SimWhatsAppClient, verifyMetaSignature } from "@tappay/whatsapp";
+import { parseInbound, parseStatuses, SimWhatsAppClient, verifyMetaSignature } from "@tappay/whatsapp";
 import type { PayFlow } from "./flow.js";
 
 export interface RouteDeps {
@@ -122,6 +122,8 @@ export function registerRoutes(app: FastifyInstance, d: RouteDeps): void {
   // ── Webhooks: raw body so signatures are checked over exact bytes ──────────
   void app.register(async (r) => {
     r.addContentTypeParser("application/json", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
+    // PayFast notifications are form-encoded; the signature covers the exact bytes.
+    r.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
 
     // Meta verification handshake.
     r.get<{ Querystring: Record<string, string | undefined> }>("/webhooks/whatsapp", async (req, reply) => {
@@ -144,6 +146,15 @@ export function registerRoutes(app: FastifyInstance, d: RouteDeps): void {
       } catch {
         return reply.code(400).send({ code: "bad_json", message: "body is not JSON" });
       }
+      // Delivery receipts: keep the latest status on our outbound log row (failed carries the code).
+      for (const st of parseStatuses(body)) {
+        await d.db.db
+          .updateTable("message_log")
+          .set({ status: st.errorCode ? `${st.status}:${st.errorCode}` : st.status })
+          .where("wa_message_id", "=", st.messageId)
+          .where("direction", "=", "out")
+          .execute();
+      }
       for (const m of parseInbound(body)) {
         // Dedupe by WhatsApp message id. Only non-PII fields are kept in webhook_events.
         const eventId = await recordWebhookEvent(d.db.db, { source: "whatsapp", externalId: m.messageId, signatureOk: true, payload: { kind: m.kind } });
@@ -165,8 +176,9 @@ export function registerRoutes(app: FastifyInstance, d: RouteDeps): void {
       const raw = req.body as Buffer;
       let ev;
       try {
-        ev = await provider.verifyWebhook({ headers: req.headers as Record<string, string | undefined>, rawBody: Buffer.isBuffer(raw) ? raw : Buffer.alloc(0) });
+        ev = await provider.verifyWebhook({ headers: req.headers as Record<string, string | undefined>, rawBody: Buffer.isBuffer(raw) ? raw : Buffer.alloc(0), remoteIp: req.ip });
       } catch (e) {
+        if (e instanceof WebhookIgnoredError) return reply.send({ ok: true, ignored: e.message });
         req.log.warn({ provider: provider.name, reason: (e as Error).message }, "provider webhook rejected");
         const code = e instanceof WebhookSignatureError ? 401 : 400;
         return reply.code(code).send({ code: "bad_signature", message: "signature check failed" });
@@ -236,6 +248,33 @@ document.querySelectorAll("button").forEach(b => b.onclick = async () => {
       return reply.send({ ok: true, webhookStatuses: statuses });
     });
   }
+
+  // Hosted checkout for form-POST providers: the short link in WhatsApp opens this page, which
+  // posts the provider's signed form straight away (a button too, for browsers without script).
+  app.get<{ Params: { token: string } }>("/pay/c/:token", async (req, reply) => {
+    const t = req.params.token;
+    const p = /^[A-Za-z0-9_-]{32}$/.test(t)
+      ? await d.db.db.selectFrom("payments").select(["status", "checkout_form", "raw", "amount_cents"]).where("checkout_token", "=", t).executeTakeFirst()
+      : undefined;
+    const expiresAt = (p?.raw as { checkoutExpiresAt?: string } | null)?.checkoutExpiresAt;
+    if (!p || !p.checkout_form || p.status !== "pending" || (expiresAt && new Date(expiresAt) <= new Date())) {
+      return reply.code(404).type("text/html").send(page("Payment", "<h1>This payment link has expired</h1><p>Go back to WhatsApp and press Pay now again.</p>"));
+    }
+    const nonce = randomBytes(16).toString("base64");
+    const f = p.checkout_form;
+    const inputs = f.fields.map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("");
+    return reply
+      .header("cache-control", "no-store")
+      .header("referrer-policy", "no-referrer")
+      .header("content-security-policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; form-action ${new URL(f.action).origin}; base-uri 'none'; frame-ancestors 'none'`)
+      .type("text/html")
+      .send(
+        page(
+          "Pay",
+          `<h1>Pay ${esc(formatRands(cents(p.amount_cents)))}</h1><p>Opening the secure payment page…</p><form id="f" method="post" action="${esc(f.action)}">${inputs}<button class="ok" type="submit">Continue to payment</button></form><script nonce="${nonce}">document.getElementById("f").submit();</script>`,
+        ),
+      );
+  });
 
   app.get("/pay/return", async (_req, reply) =>
     reply.type("text/html").send(page("Payment", "<h1>Thank you</h1><p>Return to WhatsApp. Your slip arrives there once the payment is confirmed.</p>")),

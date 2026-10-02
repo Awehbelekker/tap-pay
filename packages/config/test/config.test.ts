@@ -54,6 +54,8 @@ describe("loadConfig", () => {
   it("requires provider credentials for real providers", () => {
     expect(() => loadConfig({ ...validEnv, PROVIDER: "peach" })).toThrow(/PEACH_ENTITY_ID/);
     expect(() => loadConfig({ ...validEnv, PROVIDER: "payfast" })).toThrow(/PAYFAST_PASSPHRASE/);
+    expect(() => loadConfig({ ...validEnv, PAYFAST_PASSPHRASE: "has space!" })).toThrow(/PAYFAST_PASSPHRASE/);
+    expect(() => loadConfig({ ...validEnv, SPLIT_STRATEGY: "native" })).toThrow(/native split is not built/);
   });
 
   describe("production guards", () => {
@@ -62,8 +64,11 @@ describe("loadConfig", () => {
       NODE_ENV: "production",
       PROVIDER: "peach",
       PEACH_ENTITY_ID: "e",
-      PEACH_ACCESS_TOKEN: "t",
-      PEACH_WEBHOOK_SECRET: "s",
+      PEACH_CLIENT_ID: "c",
+      PEACH_CLIENT_SECRET: "s",
+      PEACH_MERCHANT_ID: "m",
+      PEACH_SECRET_TOKEN: "t",
+      PROVIDER_SANDBOX: "false",
       WA_MODE: "cloud",
       WA_PHONE_NUMBER_ID: "1",
       WA_BUSINESS_ACCOUNT_ID: "2",

@@ -205,7 +205,10 @@ export interface PaymentsTable {
   raw: ColumnType<unknown, string | null, string | null> | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
-  paid_at: Date | null;
+  paid_at: Generated<Date | null>;
+  checkout_token: Generated<string | null>;
+  provider_payment_id: Generated<string | null>;
+  checkout_form: ColumnType<{ action: string; fields: [string, string][] } | null, string | null | undefined, string | null>;
 }
 
 export interface LedgerEntriesTable {
