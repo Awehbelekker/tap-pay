@@ -76,7 +76,7 @@ export async function renderSlipPng(d: SlipData): Promise<Buffer> {
       rule(),
       ...lineRows,
       rule(),
-      row("Bill", R(d.base)),
+      ...(d.base > 0 || d.lines.length ? [row("Bill", R(d.base))] : []),
       row(d.staff ? `Tip for ${d.staff}` : "Tip", R(d.tip)),
       row("Total paid", R(d.total), true),
       rule(),

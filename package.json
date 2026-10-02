@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "test": "vitest run --no-file-parallelism",
     "test:watch": "vitest",
-    "e2e": "vitest run --no-file-parallelism apps/api/test/tapToSlip.e2e.test.ts",
+    "e2e": "vitest run --no-file-parallelism apps/api/test/*.e2e.test.ts",
     "db:migrate": "pnpm --filter @tappay/db migrate up",
     "db:rollback": "pnpm --filter @tappay/db migrate down",
     "db:seed": "pnpm --filter @tappay/db seed",

@@ -46,7 +46,7 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | --- | --- | --- | --- | --- |
 | O1 | Money format in messages | `R1 234,50` | `R 500.00` ("rands with two decimals") | Pack format (`formatRands`) |
 | O2 | Tip step for fixed bills | 3 reply buttons: Tip 10% / Tip 15% / Other | List message: No tip, 10%, 15%, 20%, Custom (buttons cap at 3) | Decide in M3; the list keeps "No tip" one tap away |
-| O3 | Quick-tip presets | R20 / R50 / Other (MESSAGES) and R5/R10/R20 (SPEC 3) | R5, R10, R20; Other | Per-merchant config; seed R5/R10/R20 |
+| O3 | Quick-tip presets | R20 / R50 / Other (MESSAGES) and R5/R10/R20 (SPEC 3) | R5, R10, R20; Other | Per-merchant config, default R5/R10/R20 (I9) |
 | O4 | Late webhook fallback | `reconcile.payments` every 15 min for sessions pending over 5 min | Poll the provider after 60 seconds | Add a targeted 60 s status poll per session in M1 |
 
 | O6 | Session times out before payment | Bill `claimed → open` (release, or claim idle for SESSION_TTL) and also `claimed → abandoned` (customer left) | Same two rules | M1 releases to `open`. M7 decides when a timed-out claim becomes `abandoned` and starts reminders |
@@ -62,6 +62,19 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I5 | NTAG424 tags are refused at `/t/` until SDM verification ships (M9); only static tags work, and only outside production unless `ALLOW_STATIC_TAGS=true` | Never accept an unverified tap | M9 |
 | I6 | Fee absorbed by the merchant; tip goes 100% to the staff member tied to the bill, else the merchant | `ledger_only` with no split rules yet | M5 split rules and pools |
 
+## Implementation choices made in M2 (revisit later)
+
+| # | Choice | Why | Revisit |
+| --- | --- | --- | --- |
+| I7 | A bill link `/b/<token>` lets anyone holding it pay, with no bill code | The 192-bit token is the authorisation; SPEC 5 says someone else may pay. The bill code guards tag taps, where anyone nearby can tap | If merchants want links locked to the number on the bill |
+| I8 | Open-amount and quick-tip bills are created by the tap, addressed to and claimed by that customer, and hidden from everyone else's matching | Two people at the same till or car guard must not lock each other out | - |
+| I9 | Quick tip uses a list (R5, R10, R20, Other amount), resolving O3 with per-merchant presets (`quick_tip_presets_cents`, default R5/R10/R20) and limits R2 to R1 000 | Four options do not fit Meta's 3 reply buttons | Owner to confirm presets |
+| I10 | Shares are set by the merchant (n equal shares, remainder cents on the first shares, or explicit amounts). A customer cannot type a custom share amount yet | Keeps every share summing to the bill to the cent | PDF step 2d "Custom amount" for groups: add when table service is piloted |
+| I11 | A payment for a stale amount (checkout opened before a merchant edit) is recorded and flagged `payment.needs_refund`; the bill is not settled | Never settle a bill at an amount it no longer has | M5 refunds |
+| I12 | Bill code lockout is per customer and tag: 3 wrong codes lock for 15 minutes, then the count restarts. A code prompt waits 10 minutes for the answer | SPEC 5 and 19 | M9 adds per-tag and per-IP rate limits |
+| I13 | "Here is your slip again" applies to a bill on the tag the customer paid in the last 2 hours | Long enough for a customer still at the counter | - |
+| I14 | Merchant create, release, edit and cancel are `PayFlow` methods without HTTP routes | They need staff auth, which arrives with the PWA in M4 | M4 |
+
 ## Schema fixes made in M0
 
 See `db/README.md`: `audit_log` trigger ordering, global `opt_outs` with null merchant, truncate guards.
@@ -74,3 +87,4 @@ Append entries as `YYYY-MM-DD, question id, decision, reason, who`.
 2026-10-02, -, Migrations are plain SQL files run by a small runner in packages/db (up/down, one transaction each, advisory lock), not Kysely's TS migrator, so the schema stays reviewable SQL, Claude Code
 2026-10-02, -, Apps run TypeScript through tsx in dev and production (no build step) for M0; revisit before pilot if cold start or memory matters, Claude Code
 2026-10-02, O2, Tip step implemented as a list message (see I3), Claude Code
+2026-10-02, O3, Quick-tip presets are per merchant, default R5/R10/R20, shown as a list (see I9), Claude Code

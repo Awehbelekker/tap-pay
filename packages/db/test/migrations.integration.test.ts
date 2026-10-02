@@ -83,6 +83,12 @@ describe.skipIf(!url)("migrations (integration)", () => {
     await h.pool.query("insert into opt_outs (customer_id, merchant_id) values ($1, $2)", [id, SEED.merchantId]);
   });
 
+  it("returns bigint and bigint[] money columns as safe integers", async () => {
+    const m = await h.db.selectFrom("merchants").select(["payout_threshold_cents", "quick_tip_presets_cents"]).where("id", "=", SEED.merchantId).executeTakeFirstOrThrow();
+    expect(m.payout_threshold_cents).toBe(10000);
+    expect(m.quick_tip_presets_cents).toEqual([500, 1000, 2000]);
+  });
+
   it("allows at most one tag-claimable open bill per tag", async () => {
     const tag = await h.db.selectFrom("tags").select("id").where("code", "=", SEED.tags.till).executeTakeFirstOrThrow();
     const insert = (token: string) =>

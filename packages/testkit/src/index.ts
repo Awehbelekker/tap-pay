@@ -19,7 +19,7 @@ export function testEnv(overrides: Record<string, string> = {}): Record<string, 
   return {
     NODE_ENV: "test",
     PRODUCT_NAME: "TestPay",
-    LOG_LEVEL: "silent",
+    LOG_LEVEL: process.env.TEST_LOG_LEVEL ?? "silent",
     DATABASE_URL: "postgres://tappay:tappay@localhost:5432/tappay_test",
     PUBLIC_API_URL: "http://localhost:3000",
     PUBLIC_WEB_URL: "http://localhost:5173",

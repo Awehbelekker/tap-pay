@@ -51,6 +51,7 @@ export const SESSION_EVENTS = [
   "skip_tip",
   "choose_tip",
   "change_tip",
+  "change_amount",
   "pay_now",
   "payment_succeeded",
   "payment_failed",
@@ -63,7 +64,7 @@ export type SessionEvent = (typeof SESSION_EVENTS)[number];
 
 export class IllegalTransition extends Error {
   constructor(
-    public readonly machine: "bill" | "session",
+    public readonly machine: "bill" | "session" | "share",
     public readonly from: string,
     public readonly event: string,
   ) {
@@ -94,6 +95,8 @@ const SESSION: Record<SessionEvent, Partial<Record<SessionState, SessionState>>>
   skip_tip: { claimed: "awaiting_confirm", awaiting_amount: "awaiting_confirm" },
   choose_tip: { awaiting_tip: "awaiting_confirm" },
   change_tip: { awaiting_confirm: "awaiting_tip" },
+  // Quick tip and open amount: back to typing or choosing the amount.
+  change_amount: { awaiting_confirm: "awaiting_amount" },
   pay_now: { awaiting_confirm: "awaiting_payment" },
   // The provider's confirmation is the truth: money was taken, so a late success is recorded
   // even after the session expired, failed or was cancelled (SPEC edge case "webhook is late").
@@ -129,3 +132,28 @@ export function canBill(from: BillState, event: BillEvent): boolean {
 export const ACTIVE_SESSION_STATES: SessionState[] = [...PRE_PAYMENT, "awaiting_payment"];
 
 export const TERMINAL_BILL_STATES: BillState[] = ["paid", "paid_other", "written_off", "cancelled", "expired"];
+
+// ── Bill shares (SPEC 5 groups) ─────────────────────────────────────────────
+
+export const SHARE_STATES = ["open", "claimed", "paid", "cancelled"] as const;
+export type ShareState = (typeof SHARE_STATES)[number];
+export const SHARE_EVENTS = ["claim", "release", "pay", "cancel"] as const;
+export type ShareEvent = (typeof SHARE_EVENTS)[number];
+
+const SHARE: Record<ShareEvent, Partial<Record<ShareState, ShareState>>> = {
+  claim: { open: "claimed" },
+  release: { claimed: "open" },
+  // A late success after the claim was released is still money taken: record it.
+  pay: { claimed: "paid", open: "paid" },
+  cancel: { open: "cancelled", claimed: "cancelled" },
+};
+
+export function nextShare(from: ShareState, event: ShareEvent): ShareState {
+  const to = SHARE[event][from];
+  if (!to) throw new IllegalTransition("share", from, event);
+  return to;
+}
+
+export function canShare(from: ShareState, event: ShareEvent): boolean {
+  return SHARE[event][from] !== undefined;
+}

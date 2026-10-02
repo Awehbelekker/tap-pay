@@ -61,6 +61,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const crypto_ = Crypto.fromConfig(deps.config);
   const flow = new PayFlow({ config: deps.config, db: deps.db.db, crypto: crypto_, wa: adapters.wa, provider: adapters.provider, clock, log: app.log });
   registerRoutes(app, { config: deps.config, db: deps.db, crypto: crypto_, flow, provider: adapters.provider, wa: adapters.wa });
+  // The merchant API (M4) authenticates and then calls these flow methods; tests use them directly.
+  app.decorate("payFlow", flow);
 
   return app;
 }

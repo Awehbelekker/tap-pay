@@ -35,7 +35,7 @@ const SESSION_EXPECT: Record<SessionState, Partial<Record<SessionEvent, SessionS
   claimed: { ask_amount: "awaiting_amount", ask_tip: "awaiting_tip", skip_tip: "awaiting_confirm", ...pre },
   awaiting_amount: { ask_tip: "awaiting_tip", skip_tip: "awaiting_confirm", ...pre },
   awaiting_tip: { choose_tip: "awaiting_confirm", ...pre },
-  awaiting_confirm: { change_tip: "awaiting_tip", pay_now: "awaiting_payment", ...pre },
+  awaiting_confirm: { change_tip: "awaiting_tip", change_amount: "awaiting_amount", pay_now: "awaiting_payment", ...pre },
   awaiting_payment: { payment_succeeded: "paid", payment_failed: "failed", ...pre },
   paid: { refund_full: "refunded", refund_partial: "partially_refunded" },
   failed: { payment_succeeded: "paid" },

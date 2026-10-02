@@ -1,14 +1,20 @@
 import { Kysely, PostgresDialect, sql, type ColumnType, type Generated } from "kysely";
-import type { BillState, SessionState } from "@tappay/core";
+import type { BillState, SessionState, ShareState } from "@tappay/core";
 import pg from "pg";
 
 // bigint columns come back as strings by default; money columns are bigint cents, and every
 // amount we store is a safe integer, so parse to number and fail loudly if one ever is not.
-pg.types.setTypeParser(20, (v: string) => {
+function safeBigint(v: string): number {
   const n = Number(v);
   if (!Number.isSafeInteger(n)) throw new Error("bigint column value exceeds safe integer range");
   return n;
-});
+}
+pg.types.setTypeParser(20, safeBigint);
+// bigint[] (e.g. quick_tip_presets_cents) arrives as strings too: same rule, element by element.
+// OID 1016 = int8[]; @types/pg's TypeId enum does not list array OIDs.
+const INT8_ARRAY = 1016 as unknown as Parameters<typeof pg.types.setTypeParser>[0];
+const parseTextArray = pg.types.getTypeParser(INT8_ARRAY) as (v: string) => (string | null)[];
+pg.types.setTypeParser(INT8_ARRAY, (v: string) => parseTextArray(v).map((x) => (x === null ? null : safeBigint(x))));
 
 /**
  * Kysely table types for the tables in use so far; the remaining tables are added with the
@@ -28,6 +34,11 @@ export interface MerchantsTable {
   tips_enabled: Generated<boolean>;
   reminders_enabled: Generated<boolean>;
   status: Generated<string>;
+  no_bill_action: "none" | "ask_amount" | null;
+  quick_tip_presets_cents: Generated<number[]>;
+  quick_tip_min_cents: Generated<number>;
+  quick_tip_max_cents: Generated<number>;
+  open_amount_max_cents: Generated<number>;
   created_at: Generated<Date>;
 }
 
@@ -102,6 +113,28 @@ export interface BillsTable {
   shift_id: string | null;
   version: Generated<number>;
   created_at: Generated<Date>;
+}
+
+export interface BillSharesTable {
+  id: Generated<string>;
+  bill_id: string;
+  merchant_id: string;
+  label: string | null;
+  amount_cents: number;
+  status: Generated<ShareState>;
+  customer_id: string | null;
+  claimed_at: Date | null;
+  version: Generated<number>;
+}
+
+export interface BillCodePromptsTable {
+  customer_id: string;
+  tag_id: string;
+  merchant_id: string;
+  failures: Generated<number>;
+  awaiting_until: Date | null;
+  locked_until: Date | null;
+  updated_at: Generated<Date>;
 }
 
 export interface ClaimTokensTable {
@@ -213,6 +246,8 @@ export interface Database {
   services: ServicesTable;
   customers: CustomersTable;
   bills: BillsTable;
+  bill_shares: BillSharesTable;
+  bill_code_prompts: BillCodePromptsTable;
   claim_tokens: ClaimTokensTable;
   sessions: SessionsTable;
   payments: PaymentsTable;

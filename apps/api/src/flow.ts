@@ -1,13 +1,20 @@
+import { randomInt } from "node:crypto";
 import type { Kysely } from "@tappay/db";
 import type { FastifyBaseLogger } from "fastify";
 import {
+  BILL_CODE_LOCK_MINUTES,
+  BILL_CODE_MAX_ATTEMPTS,
   canBill,
   canSession,
+  canShare,
   cents,
+  decideTap,
+  equalShares,
   hashToken,
   newClaimToken,
   newUrlToken,
   nextSession,
+  parseBillCode,
   parsePayCommand,
   parsePercent,
   parseRands,
@@ -17,43 +24,68 @@ import {
   type Clock,
   type PaymentProvider,
   type SessionState,
+  type TapDecision,
   type VerifiedEvent,
   type WhatsAppClient,
 } from "@tappay/core";
 import type { Config } from "@tappay/config";
 import {
+  activeSessionsOnBill,
   audit,
+  awaitingCodePrompt,
+  billByToken,
   consumeClaimToken,
+  createBill,
   createReceipt,
   createSession,
   customerMsisdn,
   findTagForTap,
   getBill,
+  getCodePrompt,
+  getShare,
   insertClaimToken,
   insertPendingPayment,
   insertPostings,
   latestActiveSession,
+  linesTotal,
+  listShares,
   liveBillsOnTag,
   lockPaymentByProviderRef,
   logMessage,
+  openBillByCode,
   optOutGlobally,
   pendingPaymentForSession,
   receiptByPayment,
+  recentlyPaidOnTag,
+  setBillLines,
+  setCodePrompt,
   settlePayment,
   transitionBill,
   transitionSession,
+  transitionShare,
+  unpaidShareCount,
   upsertCustomer,
   type BillLine,
   type Crypto,
   type Database,
 } from "@tappay/db";
 import { isValidTagCode, waMeLink } from "@tappay/tag";
-import { catalogue, IDS, parseTipId, type InboundMessage, type OutMessage } from "@tappay/whatsapp";
+import {
+  catalogue,
+  IDS,
+  parseBillId,
+  parseQuickTipId,
+  parseShareId,
+  parseTipId,
+  type InboundMessage,
+  type OutMessage,
+} from "@tappay/whatsapp";
 
 /**
- * The customer pay flow (SPEC 4): tap -> claim -> tip -> confirm -> hosted checkout -> provider
- * webhook -> paid -> slip. M1 scope: fixed bills on a tag, number-match and first-tap claim.
- * Bill codes, shares, open amounts and quick tips are M2/M3.
+ * The customer pay flow (SPEC 4 and 5): tap or bill link -> match -> claim a bill or a share,
+ * or enter an amount / quick tip -> tip -> confirm -> hosted checkout -> provider webhook ->
+ * paid -> slip. Merchant actions (create, release, edit, cancel) live here too so the M4
+ * merchant API is a thin authenticated layer over them.
  *
  * Every handler is safe to run twice: state changes are compare-and-set through the state
  * machines, inbound events are de-duplicated by the caller, and checkout creation is keyed by
@@ -70,8 +102,12 @@ export interface FlowDeps {
   log: FastifyBaseLogger;
 }
 
-const HOUR = 3_600_000;
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 const MIN_CUSTOM_TIP = 100;
+const MIN_OPEN_AMOUNT = 100;
+const CODE_PROMPT_MINUTES = 10;
+const SLIP_AGAIN_WINDOW = 2 * HOUR;
 
 function describeLines(lines: BillLine[] | null | undefined): string {
   const names = (lines ?? []).map((l) => l.description).filter(Boolean);
@@ -79,6 +115,32 @@ function describeLines(lines: BillLine[] | null | undefined): string {
 }
 
 type ActiveSession = NonNullable<Awaited<ReturnType<typeof latestActiveSession>>>;
+type TagContext = NonNullable<Awaited<ReturnType<typeof findTagForTap>>>;
+
+export class FlowError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "FlowError";
+  }
+}
+
+export interface NewBillInput {
+  merchantId: string;
+  createdBy: string | null;
+  /** Tag the customer will tap (appointment, counter, table). Omit for field/remote links. */
+  tagCode?: string | null;
+  lines: BillLine[];
+  /** E.164 or local number: enables number match and the 4-digit code for other numbers. */
+  customerMsisdn?: string | null;
+  tableLabel?: string | null;
+  /** Split into shares: n equal shares, or explicit amounts that sum to the total. */
+  shares?: { equal: number } | { amounts: { label: string; amountCents: number }[] };
+  /** Staff member the tip goes to; defaults to the tag's assigned person. */
+  assignedUserId?: string | null;
+}
 
 export class PayFlow {
   constructor(private readonly d: FlowDeps) {}
@@ -87,7 +149,11 @@ export class PayFlow {
     return this.d.clock.now();
   }
 
-  // ── Tap ────────────────────────────────────────────────────────────────────
+  private sessionExpiry(): Date {
+    return new Date(this.now().getTime() + this.d.config.SESSION_TTL_MINUTES * MINUTE);
+  }
+
+  // ── Entry points: tag tap and bill link ────────────────────────────────────
 
   /** Returns where to send the phone, or null for the generic "take payment another way" page. */
   async tapRedirect(code: string): Promise<string | null> {
@@ -103,12 +169,28 @@ export class PayFlow {
       await audit(db, { merchantId: tag.merchantId, actorKind: "system", actorId: null, action: "tap.unverified", entity: "tag", entityId: tag.tagId });
       return null;
     }
+    return this.mintRedirect({ tagId: tag.tagId, billId: null, merchantId: tag.merchantId });
+  }
 
+  /**
+   * Bill link or QR (SPEC 5 rule 5): `/b/<bill token>` carries the bill id, so there is no
+   * ambiguity when several customers wait. Possession of the unguessable link is the
+   * authorisation; anyone holding it may pay (SPEC 5: someone else may pay a bill).
+   */
+  async billLinkRedirect(billToken: string): Promise<string | null> {
+    if (!/^[A-Za-z0-9_-]{20,64}$/.test(billToken)) return null;
+    const bill = await billByToken(this.d.db, billToken);
+    if (!bill || (bill.status !== "open" && bill.status !== "claimed") || bill.expires_at <= this.now()) return null;
+    return this.mintRedirect({ tagId: bill.tag_id, billId: bill.id, merchantId: bill.merchant_id });
+  }
+
+  private async mintRedirect(i: { tagId: string | null; billId: string | null; merchantId: string }): Promise<string | null> {
+    const { config, db } = this.d;
     const expiresAt = new Date(this.now().getTime() + config.CLAIM_TOKEN_TTL_SECONDS * 1000);
     for (let attempt = 0; attempt < 3; attempt++) {
       const token = newClaimToken();
       try {
-        await insertClaimToken(db, { hash: hashToken(token, config.HASH_PEPPER), tagId: tag.tagId, merchantId: tag.merchantId, expiresAt });
+        await insertClaimToken(db, { hash: hashToken(token, config.HASH_PEPPER), tagId: i.tagId, billId: i.billId, merchantId: i.merchantId, expiresAt });
       } catch {
         continue; // hash collision with a live token: draw again
       }
@@ -137,6 +219,20 @@ export class PayFlow {
         await audit(db, { merchantId: null, actorKind: "customer", actorId: customerId, action: "customer.opt_out", entity: "customer", entityId: customerId });
         return reply(catalogue.stopOk());
       }
+      // A 4-digit bill code, when we just asked for one.
+      const code = parseBillCode(m.text);
+      if (code) {
+        const prompt = await awaitingCodePrompt(db, customerId, this.now());
+        if (prompt) return this.onBillCode(m.from, customerId, prompt.tag_id, code);
+      }
+    }
+
+    // Choosing a bill or a share happens before any session exists.
+    if (m.kind === "reply") {
+      const billId = parseBillId(m.replyId);
+      if (billId) return this.onChooseBill(m.from, customerId, billId);
+      const shareId = parseShareId(m.replyId);
+      if (shareId) return this.onChooseShare(m.from, customerId, shareId);
     }
 
     const s = await this.liveSession(m.from, customerId);
@@ -144,13 +240,14 @@ export class PayFlow {
     if (!s) return reply(catalogue.fallback());
 
     if (m.kind === "text" && s.status === "awaiting_tip") return this.onCustomTip(m.from, customerId, s, m.text);
+    if (m.kind === "text" && s.status === "awaiting_amount") return this.onAmountText(m.from, customerId, s, m.text);
     if (m.kind === "reply") return this.onReply(m.from, customerId, s, m.replyId);
     return this.resendPrompt(m.from, customerId, s);
   }
 
   /**
-   * The customer's in-progress session. If its time ran out, expire it, release the bill, tell
-   * the customer, and return "expired".
+   * The customer's in-progress session. If its time ran out, expire it, release what it held,
+   * tell the customer, and return "expired".
    */
   private async liveSession(to: string, customerId: string): Promise<ActiveSession | "expired" | null> {
     const { db } = this.d;
@@ -158,103 +255,320 @@ export class PayFlow {
     if (!s) return null;
     if (s.expiresAt.getTime() > this.now().getTime()) return s;
     if (canSession(s.status, "expire")) await transitionSession(db, s.id, s.status, "expire");
-    await this.releaseBillIfMine(s.merchantId, s.billId, customerId);
+    await this.releaseHold(s, customerId);
     await this.send(to, customerId, s.merchantId, catalogue.sessionExpired());
     return "expired";
   }
 
-  private async releaseBillIfMine(merchantId: string, billId: string | null, customerId: string): Promise<void> {
-    if (!billId) return;
-    const bill = await getBill(this.d.db, merchantId, billId);
+  /** Give back what a session held: its share, or the whole bill. */
+  private async releaseHold(s: { merchantId: string; billId: string | null; shareId: string | null }, customerId: string): Promise<void> {
+    const { db } = this.d;
+    if (s.shareId) {
+      const share = await getShare(db, s.shareId);
+      if (share?.status === "claimed" && share.customer_id === customerId) {
+        await transitionShare(db, share.id, "claimed", "release", { customer_id: null, claimed_at: null });
+      }
+      return;
+    }
+    if (!s.billId) return;
+    const bill = await getBill(db, s.merchantId, s.billId);
     if (bill?.status === "claimed" && bill.customer_id === customerId) {
-      await transitionBill(this.d.db, billId, "claimed", "release", { customer_id: null, claimed_at: null });
+      await transitionBill(db, s.billId, "claimed", "release", { customer_id: null, claimed_at: null });
     }
   }
 
   private async onPay(to: string, customerId: string, token: string): Promise<void> {
-    const { db, config, crypto } = this.d;
+    const { db, config } = this.d;
     const now = this.now();
     const claim = await consumeClaimToken(db, hashToken(token, config.HASH_PEPPER), now);
-    if (!claim?.tagId) return this.send(to, customerId, null, catalogue.tokenInvalid());
+    if (!claim) return this.send(to, customerId, null, catalogue.tokenInvalid());
+    if (claim.billId) return this.onBillLink(to, customerId, claim.merchantId, claim.billId);
+    if (!claim.tagId) return this.send(to, customerId, null, catalogue.tokenInvalid());
+
     const tag = await findTagForTap(db, { id: claim.tagId });
     if (!tag || tag.tagStatus !== "active" || tag.merchantStatus !== "active") {
       return this.send(to, customerId, null, catalogue.tagNotVerified());
     }
-    const merchant = tag.merchantName;
-    const myHash = crypto.lookupHash(to);
     const bills = await liveBillsOnTag(db, tag.merchantId, tag.tagId, now);
 
-    // Customer taps twice: carry on with the bill they already hold.
-    const mine = bills.find((b) => b.status === "claimed" && b.customer_id === customerId);
-    if (mine) {
-      const s = await latestActiveSession(db, customerId);
-      if (s && s.billId === mine.id && s.status !== "failed") {
-        if (s.expiresAt.getTime() > now.getTime()) return this.resendPrompt(to, customerId, s);
-        // A fresh tap restarts the step quietly; the customer keeps the bill they hold.
-        if (canSession(s.status, "expire")) await transitionSession(db, s.id, s.status, "expire");
+    // Already paying something on this tag (a bill or a share): carry on, or restart the step.
+    const current = await latestActiveSession(db, customerId);
+    if (current && current.status !== "failed" && bills.some((b) => b.id === current.billId)) {
+      if (current.expiresAt.getTime() > now.getTime()) return this.resendPrompt(to, customerId, current);
+      if (canSession(current.status, "expire")) await transitionSession(db, current.id, current.status, "expire");
+      if (current.shareId) await this.releaseHold(current, customerId);
+    }
+
+    const myHash = this.d.crypto.lookupHash(to);
+    const prompt = await getCodePrompt(db, customerId, tag.tagId);
+    const decision = decideTap({
+      mode: tag.mode,
+      noBillActionOverride: tag.noBillAction,
+      customerId,
+      // Open-amount and quick-tip bills are created by a tap for one customer: private to them,
+      // they never lock the tag for the next person.
+      bills: bills
+        .filter((b) => b.type === "fixed" || b.customer_id === customerId)
+        .map((b) => ({
+        id: b.id,
+        status: b.status as "open" | "claimed",
+        customerId: b.customer_id,
+        addressedToMe: b.intended_msisdn_hash ? b.intended_msisdn_hash.equals(myHash) : null,
+        hasShares: Boolean(b.has_shares),
+      })),
+      codeLocked: Boolean(prompt?.locked_until && prompt.locked_until > now),
+      recentlyPaidByMe: (await recentlyPaidOnTag(db, tag.merchantId, tag.tagId, customerId, new Date(now.getTime() - SLIP_AGAIN_WINDOW)))?.receiptToken ?? null,
+    });
+    return this.act(to, customerId, tag, decision);
+  }
+
+  private async act(to: string, customerId: string, tag: TagContext, d: TapDecision): Promise<void> {
+    const { db } = this.d;
+    const merchant = tag.merchantName;
+    const say = (msg: OutMessage) => this.send(to, customerId, tag.merchantId, msg);
+    switch (d.kind) {
+      case "resume": {
+        const bill = await getBill(db, tag.merchantId, d.billId);
+        if (!bill) return say(catalogue.fallback());
+        // A bill made by a tap (open amount, quick tip) restarts at the amount step.
+        const amountFirst = bill.type !== "fixed";
+        return this.startSession(to, customerId, tag.merchantId, tag.tipsEnabled, { billId: bill.id, base: amountFirst ? 0 : bill.subtotal_cents, amountFirst });
       }
-      return this.startSession(to, customerId, tag, mine);
+      case "claim":
+        return this.claimAndStart(to, customerId, tag.merchantId, tag.tipsEnabled, d.billId, merchant);
+      case "choose_bill": {
+        const bills = await Promise.all(d.billIds.map((id) => getBill(db, tag.merchantId, id)));
+        return say(
+          catalogue.chooseBill({
+            merchant,
+            bills: bills.filter((b) => b !== undefined).map((b) => ({ id: b.id, description: describeLines(b.lines), amount: cents(b.subtotal_cents) })),
+          }),
+        );
+      }
+      case "choose_share":
+        return this.offerShares(to, customerId, tag.merchantId, d.billId, merchant);
+      case "code_needed":
+        await setCodePrompt(db, {
+          customerId,
+          tagId: tag.tagId,
+          merchantId: tag.merchantId,
+          failures: await this.currentFailures(customerId, tag.tagId),
+          awaitingUntil: new Date(this.now().getTime() + CODE_PROMPT_MINUTES * MINUTE),
+          lockedUntil: null,
+        });
+        return say(catalogue.codeAsk({ merchant }));
+      case "code_locked": {
+        const p = await getCodePrompt(db, customerId, tag.tagId);
+        const minutes = p?.locked_until ? Math.max(1, Math.ceil((p.locked_until.getTime() - this.now().getTime()) / MINUTE)) : BILL_CODE_LOCK_MINUTES;
+        return say(catalogue.codeLocked({ merchant, minutes }));
+      }
+      case "locked":
+        return say(catalogue.billClaimedOther({ merchant }));
+      case "ask_amount":
+        return this.startOnTheFly(to, customerId, tag, "open");
+      case "quick_tip":
+        return this.startOnTheFly(to, customerId, tag, "quick_tip");
+      case "paid_already":
+        return say(catalogue.billPaidAlready({ merchant, receiptUrl: `${this.d.config.PUBLIC_API_URL}/r/${d.ref}` }));
+      case "none":
+        return say(catalogue.billNone({ merchant }));
     }
+  }
 
-    // SPEC 5: a bill addressed to this number first, then the tag's one claimable bill.
-    const target =
-      bills.find((b) => b.status === "open" && b.intended_msisdn_hash?.equals(myHash)) ??
-      bills.find((b) => b.status === "open" && b.intended_msisdn_hash === null);
-    if (target) {
-      const won = await transitionBill(db, target.id, "open", "claim", { customer_id: customerId, claimed_at: now });
-      if (!won) return this.send(to, customerId, tag.merchantId, catalogue.billClaimedOther({ merchant }));
-      await audit(db, { merchantId: tag.merchantId, actorKind: "customer", actorId: customerId, action: "bill.claimed", entity: "bill", entityId: target.id });
-      return this.startSession(to, customerId, tag, target);
+  /** Bill link path: the bill is known, so no tag matching (and no bill code). */
+  private async onBillLink(to: string, customerId: string, merchantId: string, billId: string): Promise<void> {
+    const { db } = this.d;
+    const bill = await getBill(db, merchantId, billId);
+    const m = await db.selectFrom("merchants").select(["name", "tips_enabled"]).where("id", "=", merchantId).executeTakeFirst();
+    if (!bill || !m) return this.send(to, customerId, merchantId, catalogue.tokenInvalid());
+    const current = await latestActiveSession(db, customerId);
+    if (current && current.billId === bill.id && current.status !== "failed" && current.expiresAt > this.now()) {
+      return this.resendPrompt(to, customerId, current);
     }
+    if (bill.status === "open" && (await listShares(db, bill.id)).length > 0) return this.offerShares(to, customerId, merchantId, bill.id, m.name);
+    if (bill.status === "open") return this.claimAndStart(to, customerId, merchantId, m.tips_enabled, bill.id, m.name);
+    if (bill.status === "claimed" && bill.customer_id === customerId) {
+      return this.startSession(to, customerId, merchantId, m.tips_enabled, { billId: bill.id, base: bill.subtotal_cents });
+    }
+    if (bill.status === "claimed") return this.send(to, customerId, merchantId, catalogue.billClaimedOther({ merchant: m.name }));
+    return this.send(to, customerId, merchantId, catalogue.billNone({ merchant: m.name }));
+  }
 
-    if (bills.some((b) => b.status === "claimed")) {
-      return this.send(to, customerId, tag.merchantId, catalogue.billClaimedOther({ merchant }));
+  private async claimAndStart(to: string, customerId: string, merchantId: string, tipsEnabled: boolean, billId: string, merchant: string): Promise<void> {
+    const { db } = this.d;
+    const won = await transitionBill(db, billId, "open", "claim", { customer_id: customerId, claimed_at: this.now() });
+    if (!won) return this.send(to, customerId, merchantId, catalogue.billClaimedOther({ merchant }));
+    await audit(db, { merchantId, actorKind: "customer", actorId: customerId, action: "bill.claimed", entity: "bill", entityId: billId });
+    const bill = await getBill(db, merchantId, billId);
+    return this.startSession(to, customerId, merchantId, tipsEnabled, { billId, base: bill?.subtotal_cents ?? 0 });
+  }
+
+  private async offerShares(to: string, customerId: string, merchantId: string, billId: string, merchant: string): Promise<void> {
+    const { db } = this.d;
+    const bill = await getBill(db, merchantId, billId);
+    const open = (await listShares(db, billId)).filter((x) => x.status === "open");
+    if (!bill || open.length === 0) return this.send(to, customerId, merchantId, catalogue.sharesTaken({ merchant }));
+    return this.send(
+      to,
+      customerId,
+      merchantId,
+      catalogue.chooseShare({ merchant, total: cents(bill.subtotal_cents), shares: open.map((x) => ({ id: x.id, label: x.label ?? "Share", amount: cents(x.amount_cents) })) }),
+    );
+  }
+
+  private async onChooseBill(to: string, customerId: string, billId: string): Promise<void> {
+    const { db } = this.d;
+    const bill = await db
+      .selectFrom("bills")
+      .innerJoin("merchants", "merchants.id", "bills.merchant_id")
+      .select(["bills.id", "bills.merchant_id", "bills.status", "bills.intended_msisdn_hash", "bills.expires_at", "merchants.name", "merchants.tips_enabled"])
+      .where("bills.id", "=", billId)
+      .executeTakeFirst();
+    // Only a bill addressed to this number can be picked this way.
+    if (!bill || !bill.intended_msisdn_hash?.equals(this.d.crypto.lookupHash(to)) || bill.expires_at <= this.now()) {
+      return this.send(to, customerId, null, catalogue.fallback());
     }
-    // Bills addressed to other numbers need the 4-digit bill code: M2.
-    return this.send(to, customerId, tag.merchantId, catalogue.billNone({ merchant }));
+    if (bill.status !== "open") return this.send(to, customerId, bill.merchant_id, catalogue.billClaimedOther({ merchant: bill.name }));
+    return this.claimAndStart(to, customerId, bill.merchant_id, bill.tips_enabled, bill.id, bill.name);
+  }
+
+  private async onChooseShare(to: string, customerId: string, shareId: string): Promise<void> {
+    const { db } = this.d;
+    const share = await getShare(db, shareId);
+    if (!share) return this.send(to, customerId, null, catalogue.fallback());
+    const bill = await getBill(db, share.merchant_id, share.bill_id);
+    const m = await db.selectFrom("merchants").select(["name", "tips_enabled"]).where("id", "=", share.merchant_id).executeTakeFirstOrThrow();
+    if (!bill || bill.status !== "open" || bill.expires_at <= this.now()) return this.send(to, customerId, share.merchant_id, catalogue.billNone({ merchant: m.name }));
+    const won = share.status === "open" && (await transitionShare(db, share.id, "open", "claim", { customer_id: customerId, claimed_at: this.now() }));
+    if (!won) return this.offerShares(to, customerId, share.merchant_id, share.bill_id, m.name);
+    await audit(db, { merchantId: share.merchant_id, actorKind: "customer", actorId: customerId, action: "share.claimed", entity: "bill_share", entityId: share.id });
+    return this.startSession(to, customerId, share.merchant_id, m.tips_enabled, { billId: share.bill_id, shareId: share.id, base: share.amount_cents });
+  }
+
+  private async currentFailures(customerId: string, tagId: string): Promise<number> {
+    const p = await getCodePrompt(this.d.db, customerId, tagId);
+    if (!p) return 0;
+    // A finished lockout starts the count again.
+    if (p.locked_until && p.locked_until <= this.now()) return 0;
+    return p.failures;
+  }
+
+  private async onBillCode(to: string, customerId: string, tagId: string, code: string): Promise<void> {
+    const { db } = this.d;
+    const now = this.now();
+    const tag = await findTagForTap(db, { id: tagId });
+    if (!tag) return this.send(to, customerId, null, catalogue.fallback());
+    const merchant = tag.merchantName;
+    const p = await getCodePrompt(db, customerId, tagId);
+    if (p?.locked_until && p.locked_until > now) return this.act(to, customerId, tag, { kind: "code_locked" });
+
+    const bill = await openBillByCode(db, tag.merchantId, tagId, code, now);
+    if (bill) {
+      await setCodePrompt(db, { customerId, tagId, merchantId: tag.merchantId, failures: 0, awaitingUntil: null, lockedUntil: null });
+      return this.claimAndStart(to, customerId, tag.merchantId, tag.tipsEnabled, bill.id, merchant);
+    }
+    const failures = (await this.currentFailures(customerId, tagId)) + 1;
+    await audit(db, { merchantId: tag.merchantId, actorKind: "customer", actorId: customerId, action: "bill_code.failed", entity: "tag", entityId: tagId, detail: { failures } });
+    if (failures >= BILL_CODE_MAX_ATTEMPTS) {
+      await setCodePrompt(db, { customerId, tagId, merchantId: tag.merchantId, failures, awaitingUntil: null, lockedUntil: new Date(now.getTime() + BILL_CODE_LOCK_MINUTES * MINUTE) });
+      return this.send(to, customerId, tag.merchantId, catalogue.codeLocked({ merchant, minutes: BILL_CODE_LOCK_MINUTES }));
+    }
+    await setCodePrompt(db, { customerId, tagId, merchantId: tag.merchantId, failures, awaitingUntil: new Date(now.getTime() + CODE_PROMPT_MINUTES * MINUTE), lockedUntil: null });
+    return this.send(to, customerId, tag.merchantId, catalogue.codeBad({ left: BILL_CODE_MAX_ATTEMPTS - failures }));
+  }
+
+  /**
+   * Open amount and quick tip: the bill is created by the tap itself, addressed to and claimed
+   * by this customer (so it never blocks the tag for anyone else), then the customer types or
+   * picks the amount.
+   */
+  private async startOnTheFly(to: string, customerId: string, tag: TagContext, type: "open" | "quick_tip"): Promise<void> {
+    const { db, crypto } = this.d;
+    const now = this.now();
+    const billId = await db.transaction().execute(async (trx) => {
+      const bill = await createBill(trx, {
+        merchantId: tag.merchantId,
+        tagId: tag.tagId,
+        assignedUserId: tag.staffUserId,
+        createdBy: null,
+        lines: [],
+        billToken: newUrlToken(),
+        expiresAt: new Date(now.getTime() + this.d.config.BILL_EXPIRY_HOURS * HOUR),
+        type,
+        intendedMsisdn: { hash: crypto.lookupHash(to), enc: crypto.encrypt(to) },
+      });
+      await transitionBill(trx, bill.id, "open", "claim", { customer_id: customerId, claimed_at: now });
+      await createSession(trx, {
+        merchantId: tag.merchantId,
+        billId: bill.id,
+        customerId,
+        status: nextSession("claimed", "ask_amount"),
+        base: 0,
+        tip: 0,
+        expiresAt: this.sessionExpiry(),
+        waWindowExpiresAt: new Date(now.getTime() + 24 * HOUR),
+      });
+      return bill.id;
+    });
+    await audit(db, { merchantId: tag.merchantId, actorKind: "customer", actorId: customerId, action: `bill.${type}_started`, entity: "bill", entityId: billId });
+    const s = await latestActiveSession(db, customerId);
+    if (s) await this.resendPrompt(to, customerId, s);
   }
 
   private async startSession(
     to: string,
     customerId: string,
-    tag: { merchantId: string; tipsEnabled: boolean },
-    bill: { id: string; subtotal_cents: number },
+    merchantId: string,
+    tipsEnabled: boolean,
+    hold: { billId: string; shareId?: string; base: number; amountFirst?: boolean },
   ): Promise<void> {
     const now = this.now();
-    const status = nextSession("claimed", tag.tipsEnabled ? "ask_tip" : "skip_tip");
     await createSession(this.d.db, {
-      merchantId: tag.merchantId,
-      billId: bill.id,
+      merchantId,
+      billId: hold.billId,
+      shareId: hold.shareId ?? null,
       customerId,
-      status,
-      base: bill.subtotal_cents,
+      status: nextSession("claimed", hold.amountFirst ? "ask_amount" : tipsEnabled ? "ask_tip" : "skip_tip"),
+      base: hold.base,
       tip: 0,
-      expiresAt: new Date(now.getTime() + this.d.config.SESSION_TTL_MINUTES * 60_000),
+      expiresAt: this.sessionExpiry(),
       waWindowExpiresAt: new Date(now.getTime() + 24 * HOUR),
     });
     const s = await latestActiveSession(this.d.db, customerId);
     if (s) await this.resendPrompt(to, customerId, s);
   }
 
+  private describe(s: ActiveSession): string {
+    const what = describeLines(s.lines);
+    return s.shareLabel ? `${s.shareLabel} of ${what}` : what;
+  }
+
   /** Send whatever the session is currently waiting for. */
   private async resendPrompt(to: string, customerId: string, s: ActiveSession): Promise<void> {
     const base = cents(s.base ?? 0);
-    const description = describeLines(s.lines);
+    const description = this.describe(s);
     const merchant = s.merchantName;
+    const say = (msg: OutMessage) => this.send(to, customerId, s.merchantId, msg);
     switch (s.status) {
+      case "awaiting_amount":
+        return s.billType === "quick_tip"
+          ? say(catalogue.quickTip({ merchant, staff: s.staffName, presets: s.quickTipPresets.map((c) => cents(c)) }))
+          : say(catalogue.askAmount({ merchant }));
       case "awaiting_tip":
-        return this.send(to, customerId, s.merchantId, catalogue.claimFixed({ merchant, description, base, staff: s.staffName, tipPercents: s.tipPresets }));
+        return say(catalogue.claimFixed({ merchant, description, base, staff: s.staffName, tipPercents: s.tipPresets }));
       case "awaiting_confirm":
-        return this.send(to, customerId, s.merchantId, catalogue.confirm({ merchant, description, base, tip: cents(s.tip) }));
+        return s.billType === "quick_tip"
+          ? say(catalogue.confirmQuickTip({ merchant, staff: s.staffName, amount: cents(s.tip) }))
+          : say(catalogue.confirm({ merchant, description, base, tip: cents(s.tip) }));
       case "awaiting_payment": {
         const p = await pendingPaymentForSession(this.d.db, s.id);
         const url = (p?.raw as { checkoutUrl?: string } | null)?.checkoutUrl;
-        return this.send(to, customerId, s.merchantId, url ? catalogue.paymentPending({ merchant, url }) : catalogue.fallback());
+        return say(url ? catalogue.paymentPending({ merchant, url }) : catalogue.fallback());
       }
       case "failed":
-        return this.send(to, customerId, s.merchantId, catalogue.payFailed({ merchant }));
+        return say(catalogue.payFailed({ merchant }));
       default:
-        return this.send(to, customerId, s.merchantId, catalogue.fallback());
+        return say(catalogue.fallback());
     }
   }
 
@@ -269,11 +583,39 @@ export class PayFlow {
     return this.chooseTip(to, customerId, s, tip);
   }
 
+  /** Typed amount: an open bill's amount, or a quick tip's "Other" amount. */
+  private async onAmountText(to: string, customerId: string, s: ActiveSession, text: string): Promise<void> {
+    const amount = parseRands(text);
+    if (s.billType === "quick_tip") {
+      const min = cents(s.quickTipMin);
+      const max = cents(s.quickTipMax);
+      if (amount === null || amount < min || amount > max) return this.send(to, customerId, s.merchantId, catalogue.quickTipInvalid({ min, max }));
+      return this.setQuickTip(to, customerId, s, amount);
+    }
+    const max = cents(s.openAmountMax);
+    if (amount === null || amount < MIN_OPEN_AMOUNT || amount > max || !s.billId) {
+      return this.send(to, customerId, s.merchantId, catalogue.amountInvalid({ max }));
+    }
+    const { db } = this.d;
+    const lines: BillLine[] = [{ description: "Amount", amountCents: amount }];
+    if (!(await setBillLines(db, s.merchantId, s.billId, lines))) return this.resendPrompt(to, customerId, s);
+    const moved = await transitionSession(db, s.id, "awaiting_amount", s.tipsEnabled ? "ask_tip" : "skip_tip", { base_cents: amount, tip_cents: 0 });
+    if (!moved) return;
+    const fresh = await latestActiveSession(db, customerId);
+    if (fresh) return this.resendPrompt(to, customerId, fresh);
+  }
+
+  private async setQuickTip(to: string, customerId: string, s: ActiveSession, amount: Cents): Promise<void> {
+    // A quick tip is all tip: no bill amount, 100% to the tagged person (SPEC 3).
+    const moved = await transitionSession(this.d.db, s.id, "awaiting_amount", "skip_tip", { base_cents: 0, tip_cents: amount });
+    if (!moved) return;
+    return this.send(to, customerId, s.merchantId, catalogue.confirmQuickTip({ merchant: s.merchantName, staff: s.staffName, amount }));
+  }
+
   private async chooseTip(to: string, customerId: string, s: ActiveSession, tip: Cents): Promise<void> {
     const ok = await transitionSession(this.d.db, s.id, "awaiting_tip", "choose_tip", { tip_cents: tip });
     if (!ok) return; // a concurrent reply already moved this session on
-    const merchant = s.merchantName;
-    return this.send(to, customerId, s.merchantId, catalogue.confirm({ merchant, description: describeLines(s.lines), base: cents(s.base ?? 0), tip }));
+    return this.send(to, customerId, s.merchantId, catalogue.confirm({ merchant: s.merchantName, description: this.describe(s), base: cents(s.base ?? 0), tip }));
   }
 
   private async onReply(to: string, customerId: string, s: ActiveSession, id: string): Promise<void> {
@@ -289,9 +631,18 @@ export class PayFlow {
       return this.chooseTip(to, customerId, s, tip);
     }
 
+    const qt = parseQuickTipId(id);
+    if (qt !== null && s.status === "awaiting_amount" && s.billType === "quick_tip") {
+      if (qt === "other") return this.send(to, customerId, s.merchantId, catalogue.quickTipAsk({ min: cents(s.quickTipMin), max: cents(s.quickTipMax) }));
+      if (!s.quickTipPresets.includes(qt)) return this.resendPrompt(to, customerId, s);
+      return this.setQuickTip(to, customerId, s, cents(qt));
+    }
+
     if (id === IDS.changeTip && s.status === "awaiting_confirm") {
-      if (await transitionSession(db, s.id, "awaiting_confirm", "change_tip", { tip_cents: 0 })) {
-        return this.resendPrompt(to, customerId, { ...s, status: "awaiting_tip", tip: 0 });
+      const event = s.billType === "quick_tip" ? "change_amount" : "change_tip";
+      if (await transitionSession(db, s.id, "awaiting_confirm", event, { tip_cents: 0 })) {
+        const fresh = await latestActiveSession(db, customerId);
+        if (fresh) return this.resendPrompt(to, customerId, fresh);
       }
       return;
     }
@@ -300,29 +651,29 @@ export class PayFlow {
 
     if (id === IDS.cancel && canSession(s.status, "cancel")) {
       if (await transitionSession(db, s.id, s.status, "cancel")) {
-        await this.releaseBillIfMine(s.merchantId, s.billId, customerId);
+        await this.releaseHold(s, customerId);
         return this.send(to, customerId, s.merchantId, catalogue.cancelled({ merchant }));
       }
       return;
     }
     if (id === IDS.cancel && s.status === "failed") {
-      await this.releaseBillIfMine(s.merchantId, s.billId, customerId);
+      await this.releaseHold(s, customerId);
       return this.send(to, customerId, s.merchantId, catalogue.cancelled({ merchant }));
     }
 
     if (id === IDS.tryAgain && s.status === "failed" && s.billId) {
-      // SPEC 6.2: a retry is a new session on the same bill with a new reference.
-      const now = this.now();
+      // SPEC 6.2: a retry is a new session on the same bill (or share) with a new reference.
       const status: SessionState = nextSession(nextSession("claimed", "ask_tip"), "choose_tip");
       await createSession(db, {
         merchantId: s.merchantId,
         billId: s.billId,
+        shareId: s.shareId,
         customerId,
         status,
         base: s.base ?? 0,
         tip: s.tip,
-        expiresAt: new Date(now.getTime() + this.d.config.SESSION_TTL_MINUTES * 60_000),
-        waWindowExpiresAt: new Date(now.getTime() + 24 * HOUR),
+        expiresAt: this.sessionExpiry(),
+        waWindowExpiresAt: new Date(this.now().getTime() + 24 * HOUR),
       });
       const fresh = await latestActiveSession(db, customerId);
       if (fresh) return this.resendPrompt(to, customerId, fresh);
@@ -333,11 +684,20 @@ export class PayFlow {
     return this.resendPrompt(to, customerId, s);
   }
 
+  /** Still holding the bill or share at the amount the customer confirmed (SPEC 5)? */
+  private async stillHeld(s: ActiveSession, customerId: string): Promise<boolean> {
+    const { db } = this.d;
+    if (s.shareId) {
+      const share = await getShare(db, s.shareId);
+      return share?.status === "claimed" && share.customer_id === customerId && share.amount_cents === s.base;
+    }
+    const bill = s.billId ? await getBill(db, s.merchantId, s.billId) : undefined;
+    return bill?.status === "claimed" && bill.customer_id === customerId && bill.subtotal_cents === s.base;
+  }
+
   private async onPayNow(to: string, customerId: string, s: ActiveSession): Promise<void> {
     const { db, provider, config } = this.d;
-    const bill = s.billId ? await getBill(db, s.merchantId, s.billId) : undefined;
-    // The bill must still be held by this customer at the amount they confirmed (SPEC 5).
-    if (!bill || bill.status !== "claimed" || bill.customer_id !== customerId || bill.subtotal_cents !== s.base) {
+    if (!(await this.stillHeld(s, customerId))) {
       await transitionSession(db, s.id, "awaiting_confirm", "cancel");
       return this.send(to, customerId, s.merchantId, catalogue.sessionExpired());
     }
@@ -347,7 +707,7 @@ export class PayFlow {
     const checkout = await provider.createCheckout({
       reference: s.id,
       amount: total,
-      description: `${s.merchantName}: ${describeLines(s.lines)}`.slice(0, 120),
+      description: `${s.merchantName}: ${s.billType === "quick_tip" ? "Tip" : this.describe(s)}`.slice(0, 120),
       returnUrl: `${config.PUBLIC_API_URL}/pay/return`,
       webhookUrl: `${config.PUBLIC_API_URL}/webhooks/provider/${provider.name}`,
       idempotencyKey: `${s.id}:v${s.version}`,
@@ -370,7 +730,7 @@ export class PayFlow {
     });
     if (!moved) return; // a duplicate Pay now: the first one sends the link
 
-    const minutes = Math.max(1, Math.round((checkout.expiresAt.getTime() - this.now().getTime()) / 60_000));
+    const minutes = Math.max(1, Math.round((checkout.expiresAt.getTime() - this.now().getTime()) / MINUTE));
     return this.send(to, customerId, s.merchantId, catalogue.payLink({ merchant: s.merchantName, total, url: checkout.url, minutes }));
   }
 
@@ -384,12 +744,14 @@ export class PayFlow {
   async handleProviderEvent(ev: VerifiedEvent): Promise<{ status: "processed" | "ignored" | "failed"; error?: string }> {
     const { db, provider, config } = this.d;
     const now = this.now();
+    const flag = (trx: Kysely<Database>, merchantId: string, paymentId: string, action: string, detail: Record<string, unknown> = {}) =>
+      audit(trx, { merchantId, actorKind: "system", actorId: null, action, entity: "payment", entityId: paymentId, detail });
 
     const result = await db.transaction().execute(async (trx) => {
       const p = await lockPaymentByProviderRef(trx, provider.name, ev.providerRef);
       if (!p) return { kind: "error" as const, error: "unknown_payment" };
       if (ev.reference !== p.sessionId || ev.currency !== "ZAR") {
-        await audit(trx, { merchantId: p.merchantId, actorKind: "system", actorId: null, action: "payment.reference_mismatch", entity: "payment", entityId: p.id });
+        await flag(trx, p.merchantId, p.id, "payment.reference_mismatch");
         return { kind: "error" as const, error: "reference_mismatch" };
       }
 
@@ -397,15 +759,7 @@ export class PayFlow {
         if (p.status === "succeeded") return { kind: "duplicate" as const };
         // Never mark paid on a different amount (SPEC edge case "amount mismatch").
         if (ev.amount !== p.amount) {
-          await audit(trx, {
-            merchantId: p.merchantId,
-            actorKind: "system",
-            actorId: null,
-            action: "payment.amount_mismatch",
-            entity: "payment",
-            entityId: p.id,
-            detail: { expected: p.amount, received: ev.amount },
-          });
+          await flag(trx, p.merchantId, p.id, "payment.amount_mismatch", { expected: p.amount, received: ev.amount });
           return { kind: "error" as const, error: "amount_mismatch" };
         }
         if (!(await settlePayment(trx, p.id, { status: "succeeded", method: ev.method ?? null, fee: ev.feeCents ?? null }))) {
@@ -415,12 +769,25 @@ export class PayFlow {
           await transitionSession(trx, p.sessionId, p.sessionStatus, "payment_succeeded");
         }
         const bill = p.billId ? await getBill(trx, p.merchantId, p.billId) : undefined;
-        if (bill && canBill(bill.status, "pay")) {
-          await transitionBill(trx, bill.id, bill.status, "pay", { paid_at: now, customer_id: p.customerId });
-        } else {
-          // Money was taken but the bill was already settled or closed: customer paid twice.
-          // Refund handling is M5; flag it loudly now.
-          await audit(trx, { merchantId: p.merchantId, actorKind: "system", actorId: null, action: "payment.needs_refund", entity: "payment", entityId: p.id, detail: { billStatus: bill?.status ?? null } });
+        let settled = false;
+        if (p.shareId) {
+          // A share is paid; the bill is paid when the last share is (SPEC 5 groups).
+          const share = await getShare(trx, p.shareId);
+          if (share && share.amount_cents === p.base && canShare(share.status, "pay")) {
+            settled = await transitionShare(trx, share.id, share.status, "pay");
+            if (settled && bill && (await unpaidShareCount(trx, bill.id)) === 0 && canBill(bill.status, "pay")) {
+              await transitionBill(trx, bill.id, bill.status, "pay", { paid_at: now });
+            }
+          }
+        } else if (bill && bill.subtotal_cents === p.base && canBill(bill.status, "pay")) {
+          // Only settle the bill at the amount it now has: a checkout opened before a merchant
+          // edit pays a stale amount (SPEC 5 rule 4) and is flagged below instead.
+          settled = await transitionBill(trx, bill.id, bill.status, "pay", { paid_at: now, customer_id: p.customerId });
+        }
+        if (!settled) {
+          // Money was taken but the bill or share was already settled, closed or re-priced (a
+          // double payment or a stale amount). Refunds are M5; flag it loudly now.
+          await flag(trx, p.merchantId, p.id, "payment.needs_refund", { billStatus: bill?.status ?? null });
         }
         const base = cents(p.base ?? 0);
         const tip = cents(p.tip);
@@ -428,7 +795,7 @@ export class PayFlow {
         const token = newUrlToken();
         const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(now).replaceAll("-", "");
         await createReceipt(trx, { merchantId: p.merchantId, paymentId: p.id, token, number: `R-${day}-${p.id.slice(0, 6).toUpperCase()}` });
-        await audit(trx, { merchantId: p.merchantId, actorKind: "system", actorId: null, action: "payment.succeeded", entity: "payment", entityId: p.id });
+        await flag(trx, p.merchantId, p.id, "payment.succeeded");
         return { kind: "paid" as const, paymentId: p.id, merchantId: p.merchantId, customerId: p.customerId, total: cents(p.amount), receiptToken: token };
       }
 
@@ -437,7 +804,7 @@ export class PayFlow {
         return { kind: "duplicate" as const };
       }
       if (p.sessionStatus === "awaiting_payment") await transitionSession(trx, p.sessionId, "awaiting_payment", "payment_failed");
-      await audit(trx, { merchantId: p.merchantId, actorKind: "system", actorId: null, action: "payment.failed", entity: "payment", entityId: p.id });
+      await flag(trx, p.merchantId, p.id, "payment.failed");
       return { kind: "failed" as const, merchantId: p.merchantId, customerId: p.customerId };
     });
 
@@ -464,6 +831,120 @@ export class PayFlow {
   /** Look up the receipt for a payment (used to resend a slip). */
   async receiptFor(paymentId: string) {
     return receiptByPayment(this.d.db, paymentId);
+  }
+
+  // ── Merchant actions (M4 exposes these over the authenticated merchant API) ──
+
+  /**
+   * Create a bill for any mode (SPEC 3). Bills addressed to a number get a 4-digit code so a
+   * different phone can still claim them on the tag. Returns the bill, its code and its link.
+   */
+  async createBill(i: NewBillInput) {
+    const { db, crypto, config } = this.d;
+    if (i.lines.length === 0 || i.lines.some((l) => !Number.isSafeInteger(l.amountCents) || l.amountCents <= 0)) {
+      throw new FlowError("bad_lines", "a bill needs at least one line with a positive amount");
+    }
+    let tagId: string | null = null;
+    let assigned = i.assignedUserId ?? null;
+    if (i.tagCode) {
+      const tag = await findTagForTap(db, { code: i.tagCode });
+      if (!tag || tag.merchantId !== i.merchantId) throw new FlowError("unknown_tag", "tag not found for this merchant");
+      if (tag.tagStatus !== "active") throw new FlowError("tag_inactive", "tag is not active");
+      tagId = tag.tagId;
+      assigned ??= tag.staffUserId;
+    }
+    const total = linesTotal(i.lines);
+    const shares = !i.shares
+      ? undefined
+      : "equal" in i.shares
+        ? equalShares(total, i.shares.equal).map((amountCents, k, all) => ({ label: `Share ${k + 1} of ${all.length}`, amountCents }))
+        : i.shares.amounts;
+    const msisdn = i.customerMsisdn ?? null;
+    const bill = await db.transaction().execute((trx) =>
+      createBill(trx, {
+        merchantId: i.merchantId,
+        tagId,
+        assignedUserId: assigned,
+        createdBy: i.createdBy,
+        lines: i.lines,
+        billToken: newUrlToken(),
+        expiresAt: new Date(this.now().getTime() + config.BILL_EXPIRY_HOURS * HOUR),
+        intendedMsisdn: msisdn ? { hash: crypto.lookupHash(msisdn), enc: crypto.encrypt(msisdn) } : null,
+        billCode: msisdn ? String(randomInt(10_000)).padStart(4, "0") : null,
+        tableLabel: i.tableLabel ?? null,
+        ...(shares ? { shares } : {}),
+      }),
+    );
+    await audit(db, { merchantId: i.merchantId, actorKind: "user", actorId: i.createdBy, action: "bill.created", entity: "bill", entityId: bill.id });
+    return { bill, billCode: bill.bill_code, link: `${config.PUBLIC_API_URL}/b/${bill.bill_token}` };
+  }
+
+  /** Release a wrongly claimed bill (SPEC 5 rule 3): the claimer's session is cancelled. */
+  async releaseBill(merchantId: string, billId: string, actorUserId: string | null): Promise<void> {
+    const { db } = this.d;
+    const bill = await getBill(db, merchantId, billId);
+    if (!bill) throw new FlowError("not_found", "bill not found");
+    const touched = await this.cancelSessions(merchantId, billId, catalogue.billReleased);
+    if (bill.status === "claimed") await transitionBill(db, billId, "claimed", "release", { customer_id: null, claimed_at: null });
+    await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.released", entity: "bill", entityId: billId, detail: { sessionsCancelled: touched.length } });
+  }
+
+  /**
+   * Edit the amount after a claim (SPEC 5 rule 4): cancel the old session so nobody pays a stale
+   * amount, keep the customer's claim, and start a new session at the new amount.
+   */
+  async editBillLines(merchantId: string, billId: string, lines: BillLine[], actorUserId: string | null): Promise<void> {
+    const { db } = this.d;
+    if (lines.length === 0 || lines.some((l) => !Number.isSafeInteger(l.amountCents) || l.amountCents <= 0)) {
+      throw new FlowError("bad_lines", "a bill needs at least one line with a positive amount");
+    }
+    if ((await listShares(db, billId)).length > 0) throw new FlowError("has_shares", "split bills cannot be edited; cancel and create a new one");
+    const before = await getBill(db, merchantId, billId);
+    if (!before) throw new FlowError("not_found", "bill not found");
+    if (!(await setBillLines(db, merchantId, billId, lines))) throw new FlowError("not_editable", "bill is no longer open");
+    const touched = await this.cancelSessions(merchantId, billId, catalogue.amountChanged);
+    await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.edited", entity: "bill", entityId: billId, detail: { from: before.subtotal_cents, to: linesTotal(lines) } });
+    // The customer who held the bill gets the new amount straight away.
+    const after = await getBill(db, merchantId, billId);
+    if (after?.status === "claimed" && after.customer_id) {
+      const to = await customerMsisdn(db, this.d.crypto, after.customer_id);
+      const m = await db.selectFrom("merchants").select("tips_enabled").where("id", "=", merchantId).executeTakeFirstOrThrow();
+      if (to && touched.some((t) => t.customerId === after.customer_id)) {
+        await this.startSession(to, after.customer_id, merchantId, m.tips_enabled, { billId, base: after.subtotal_cents });
+      }
+    }
+  }
+
+  async cancelBill(merchantId: string, billId: string, actorUserId: string | null): Promise<void> {
+    const { db } = this.d;
+    const bill = await getBill(db, merchantId, billId);
+    if (!bill) throw new FlowError("not_found", "bill not found");
+    if (!canBill(bill.status, "cancel")) throw new FlowError("not_cancellable", `bill is ${bill.status}`);
+    await this.cancelSessions(merchantId, billId, catalogue.billCancelledByMerchant);
+    for (const sh of await listShares(db, billId)) {
+      if (canShare(sh.status, "cancel")) await transitionShare(db, sh.id, sh.status, "cancel");
+    }
+    await transitionBill(db, billId, bill.status, "cancel");
+    await audit(db, { merchantId, actorKind: "user", actorId: actorUserId, action: "bill.cancelled", entity: "bill", entityId: billId });
+  }
+
+  /** Cancel every in-progress session on a bill and tell each customer why. */
+  private async cancelSessions(merchantId: string, billId: string, notice: (i: { merchant: string }) => OutMessage) {
+    const { db } = this.d;
+    const sessions = await activeSessionsOnBill(db, merchantId, billId);
+    const merchant = (await db.selectFrom("merchants").select("name").where("id", "=", merchantId).executeTakeFirstOrThrow()).name;
+    const cancelled: typeof sessions = [];
+    for (const s of sessions) {
+      if (!(await transitionSession(db, s.id, s.status, "cancel"))) continue;
+      cancelled.push(s);
+      if (s.shareId) {
+        const share = await getShare(db, s.shareId);
+        if (share?.status === "claimed") await transitionShare(db, share.id, "claimed", "release", { customer_id: null, claimed_at: null });
+      }
+      const to = await customerMsisdn(db, this.d.crypto, s.customerId);
+      if (to) await this.send(to, s.customerId, merchantId, notice({ merchant }));
+    }
+    return cancelled;
   }
 
   // ── Outbound ───────────────────────────────────────────────────────────────

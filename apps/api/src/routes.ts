@@ -35,6 +35,13 @@ export function registerRoutes(app: FastifyInstance, d: RouteDeps): void {
     return reply.header("cache-control", "no-store").redirect(location, 302);
   });
 
+  // ── Bill link or QR (field, remote invoice, any bill) ──────────────────────
+  app.get<{ Params: { token: string } }>("/b/:token", async (req, reply) => {
+    const location = await flow.billLinkRedirect(req.params.token);
+    if (!location) return reply.code(404).type("text/html").send(page("Bill", "<h1>Bill not available</h1><p>This bill is paid, cancelled or expired. Please ask the merchant.</p>"));
+    return reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer").redirect(location, 302);
+  });
+
   // ── Webhooks: raw body so signatures are checked over exact bytes ──────────
   void app.register(async (r) => {
     r.addContentTypeParser("application/json", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -180,7 +187,10 @@ document.querySelectorAll("button").forEach(b => b.onclick = async () => {
       receiptNumber: v.number,
       reference: v.paymentId.slice(0, 8),
       paidAt: v.paidAt,
-      lines: (v.lines ?? []).map((l) => ({ description: l.description, amount: cents(l.amountCents * (l.quantity ?? 1)) })),
+      // A share's slip shows the share, not the whole table's bill; a quick tip has no bill lines.
+      lines: v.shareLabel
+        ? [{ description: v.shareLabel, amount: cents(v.base ?? 0) }]
+        : (v.lines ?? []).map((l) => ({ description: l.description, amount: cents(l.amountCents * (l.quantity ?? 1)) })),
       base: cents(v.base ?? 0),
       tip: cents(v.tip),
       total: cents(v.total),

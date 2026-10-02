@@ -119,7 +119,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Bill landing page for remote invoices and reminders (opens WhatsApp or shows bill) */
+        /** Bill link or QR. Mints a one-time claim token bound to this bill and redirects to WhatsApp. Anyone holding the link may pay. */
         get: {
             parameters: {
                 query?: never;

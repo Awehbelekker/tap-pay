@@ -63,7 +63,10 @@ Additional rules:
 
 - The merchant can release a claimed bill from the PWA; the old session is cancelled.
 - If the merchant edits the amount after a claim, cancel the old session and start a new one; tell the customer.
-- A bill link or QR (`/b/<token>`) carries the bill id, so no ambiguity when several customers wait.
+- A bill link or QR (`/b/<token>`) carries the bill id, so no ambiguity when several customers wait. Holding the link is enough to pay it: no bill code is asked (OPEN_QUESTIONS I7).
+- Open-amount and quick-tip taps create a bill addressed to and claimed by that customer, so they never lock the tag for the next person (I8).
+- Bill codes: 4 digits, generated when the bill has a customer number. 3 wrong tries lock that customer out of codes on that tag for 15 minutes (I12).
+- Share states: `open → claimed` (claim) · `claimed → open` (release, session expired or cancelled) · `open|claimed → paid` · `open|claimed → cancelled` (merchant). The bill is paid when its last share is paid.
 - Someone else may pay a bill. The payer gets the slip; the merchant sees the payer's masked number.
 - Groups: a bill can have shares (`bill_shares`). Each payer claims one share (equal or custom amount). Bill is `paid` when shares sum to the total.
 - The confirmation message always shows merchant name, staff name, service and amount before Pay now.

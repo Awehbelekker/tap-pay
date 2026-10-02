@@ -10,7 +10,7 @@ Accept: fresh clone to running `pnpm dev` in under 10 minutes; `/readyz` green; 
 `/t/:code` (static tag mode) -> wa.me redirect -> inbound webhook (sim) -> session -> mock checkout -> webhook -> paid -> slip PNG sent in sim.
 Accept: scripted e2e passes; duplicate webhook has no double effect; webhook with bad signature rejected.
 
-## M2 Merchant modes and bill matching
+## M2 Merchant modes and bill matching (done 2026-10-02)
 All six modes, bill types, matching algorithm (SPEC §5): number match, first-tap claim, bill code with 3 attempts and 15 min lock, release, shares. Pure state machines with exhaustive tests.
 Accept: concurrency test (50 parallel taps on one bill yields exactly one claim); every mode has an e2e scenario.
 

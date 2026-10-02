@@ -91,7 +91,7 @@ paths:
   /b/{billToken}:
     get:
       tags: [public]
-      summary: Bill landing page for remote invoices and reminders (opens WhatsApp or shows bill)
+      summary: Bill link or QR. Mints a one-time claim token bound to this bill and redirects to WhatsApp. Anyone holding the link may pay.
       parameters: [{name: billToken, in: path, required: true, schema: {type: string}}]
       responses: {'302': {description: Redirect}, '404': {$ref: '#/components/responses/Err'}}
   /r/{receiptToken}:
