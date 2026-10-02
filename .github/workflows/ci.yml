@@ -37,6 +37,41 @@ jobs:
       - name: Dependency audit (high and above fails)
         run: pnpm audit --audit-level high
 
+  web-e2e:
+    # Playwright against the production PWA build and the real API (MILESTONES M4).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tappay
+          POSTGRES_PASSWORD: tappay
+          POSTGRES_DB: tappay_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tappay" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgres://tappay:tappay@localhost:5432/tappay_test
+      TZ: Africa/Johannesburg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @tappay/web exec playwright install --with-deps chromium
+      - run: pnpm e2e:web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+
   secrets:
     runs-on: ubuntu-latest
     steps:

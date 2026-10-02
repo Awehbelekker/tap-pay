@@ -1,44 +1,83 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { api, refresh, session, type Me } from "./api";
+import { BillDetail } from "./screens/BillDetail";
+import { NewBill } from "./screens/NewBill";
+import { Settings } from "./screens/Settings";
+import { SignIn } from "./screens/SignIn";
+import { Tags } from "./screens/Tags";
+import { Today } from "./screens/Today";
+import { Screen, Spinner } from "./ui";
 
-/**
- * Merchant PWA shell (M0). Sign-in, bills, live status and the Unpaid tab arrive in M4/M7.
- * Shows the API's readiness so a fresh clone can confirm the stack is wired end to end.
- */
-const API = import.meta.env.VITE_PUBLIC_API_URL ?? "http://localhost:3000";
-const PRODUCT = import.meta.env.VITE_PRODUCT_NAME ?? "Tap to pay";
-
-type Status = "checking" | "ready" | "not ready" | "offline";
+/** Hash routes keep the PWA a single cached page that works offline. */
+function useRoute(): [string, (p: string) => void] {
+  const read = () => window.location.hash.replace(/^#/, "") || "/";
+  const [route, setRoute] = useState(read);
+  useEffect(() => {
+    const on = () => setRoute(read());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return [route, (p: string) => (window.location.hash = p)];
+}
 
 export function App() {
-  const [status, setStatus] = useState<Status>("checking");
+  const [route, go] = useRoute();
+  const [me, setMe] = useState<Me | null>(null);
+  const [state, setState] = useState<"loading" | "signed_out" | "ready" | "offline">("loading");
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API}/readyz`)
-      .then((r) => !cancelled && setStatus(r.ok ? "ready" : "not ready"))
-      .catch(() => !cancelled && setStatus("offline"));
-    return () => {
-      cancelled = true;
-    };
+  const start = useCallback(async () => {
+    setState("loading");
+    if (!session.access && !(await refresh())) return setState(navigator.onLine || !session.hasRefresh() ? "signed_out" : "offline");
+    try {
+      setMe(await api<Me>("/v1/merchant/me"));
+      setState("ready");
+    } catch {
+      setState(session.access ? "offline" : "signed_out");
+    }
   }, []);
 
-  const colour = status === "ready" ? "bg-emerald-500" : status === "checking" ? "bg-slate-400" : "bg-red-500";
+  useEffect(() => {
+    session.onSignedOut(() => {
+      setMe(null);
+      setState("signed_out");
+    });
+    void start();
+  }, [start]);
 
-  return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-6 bg-white p-4 text-slate-900">
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{PRODUCT}</h1>
-        <span className="flex items-center gap-2 text-sm text-slate-600">
-          <span className={`inline-block h-2.5 w-2.5 rounded-full ${colour}`} aria-hidden />
-          API {status}
-        </span>
-      </header>
-      <section className="rounded-xl border border-slate-200 p-4">
-        <h2 className="font-medium">Merchant app</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Create bills, see payments live and follow up unpaid bills. Coming in milestone M4.
-        </p>
-      </section>
-    </main>
-  );
+  if (state === "loading") {
+    return (
+      <Screen title="">
+        <div className="flex flex-1 items-center justify-center">
+          <Spinner />
+        </div>
+      </Screen>
+    );
+  }
+  if (state === "offline") {
+    return (
+      <Screen title="Offline">
+        <p className="text-slate-600">No connection. Your bills will show as soon as the signal is back.</p>
+        <button className="rounded-xl bg-slate-100 px-4 py-3" onClick={() => void start()}>
+          Try again
+        </button>
+      </Screen>
+    );
+  }
+  if (state === "signed_out" || !me) {
+    return (
+      <SignIn
+        onSignedIn={() => {
+          go("/"); // always land on Today, not wherever the last session was
+          void start();
+        }}
+      />
+    );
+  }
+
+  const bill = /^\/bill\/([0-9a-f-]{36})$/.exec(route);
+  if (bill) return <BillDetail id={bill[1]!} go={go} />;
+  if (route === "/new") return <NewBill me={me} go={go} />;
+  if (route === "/settings") return <Settings me={me} go={go} />;
+  if (route === "/tags" && (me.user.role === "manager" || me.user.role === "owner")) return <Tags go={go} />;
+  return <Today me={me} go={go} />;
 }

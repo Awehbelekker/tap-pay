@@ -74,6 +74,19 @@ describe("CORS", () => {
     await db.close();
   });
 
+  it("lets the PWA preflight every method and header it uses", async () => {
+    for (const method of ["PUT", "PATCH", "POST", "DELETE"]) {
+      const r = await app.inject({
+        method: "OPTIONS",
+        url: "/v1/merchant/bills",
+        headers: { origin: config.PUBLIC_WEB_URL, "access-control-request-method": method, "access-control-request-headers": "authorization,content-type,idempotency-key" },
+      });
+      expect(r.statusCode).toBe(204);
+      expect(r.headers["access-control-allow-methods"]).toContain(method);
+      expect(String(r.headers["access-control-allow-headers"])).toContain("idempotency-key");
+    }
+  });
+
   it("allows only the configured web origin", async () => {
     const ok = await app.inject({ url: "/healthz", headers: { origin: config.PUBLIC_WEB_URL } });
     expect(ok.headers["access-control-allow-origin"]).toBe(config.PUBLIC_WEB_URL);

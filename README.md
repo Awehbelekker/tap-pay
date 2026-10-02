@@ -10,13 +10,15 @@ HTTP and receive signed `bill.paid` events, and every external system sits behin
 
 ## Status
 
-**M0 to M3 done.** A customer can tap a static tag or open a bill link, claim the bill in
+**M0 to M4 done.** A customer can tap a static tag or open a bill link, claim the bill in
 WhatsApp (simulator), choose a tip, pay through the mock hosted checkout and get a branded
 slip. All six merchant modes work: appointment (number match, 4-digit code), counter (first
 tap, or the customer types the amount), table (split into shares), quick tip, field and remote
 invoice (bill links). Tips: percentage presets, custom rand or percentage tips, per-merchant
-caps, tips off, and the tip on the slip and the ledger. Next: M4 merchant PWA and
-notifications. See `docs/MILESTONES.md`.
+caps, tips off, and the tip on the slip and the ledger. Merchant PWA: sign in with a WhatsApp
+code and PIN, create bills (QR, WhatsApp link, bill code), see them go to Paid live, assign
+tags (NFC on Android or typed), alerts by push or WhatsApp, opens offline. Next: M5 money
+(splits, ledger, payouts, refunds). See `docs/MILESTONES.md`.
 
 Try it by hand after the quick start: `pnpm demo:bill`, open http://localhost:4000, press
 **Tap tag**, then **Send**.
@@ -40,6 +42,7 @@ Checks (the CI gate):
 pnpm typecheck && pnpm lint && pnpm test   # integration tests run when TEST_DATABASE_URL is set
 pnpm gen:api                               # regenerate types from api/openapi.yaml
 pnpm e2e                                   # end-to-end journeys for every mode (needs TEST_DATABASE_URL)
+pnpm e2e:web                               # Playwright: the PWA against the real API (needs TEST_DATABASE_URL)
 pnpm db:rollback                           # revert the latest migration
 ```
 
@@ -49,7 +52,7 @@ pnpm db:rollback                           # revert the latest migration
 | --- | --- |
 | `apps/api` | Fastify API: tap `/t/:code`, WhatsApp and provider webhooks, mock checkout, receipts `/r/:token`, health. Pay flow in `src/flow.ts` |
 | `apps/worker` | pg-boss worker; installs all queues and SAST schedules |
-| `apps/web` | React + Vite + Tailwind installable PWA shell |
+| `apps/web` | Merchant PWA (React, Vite, Tailwind): sign-in, Today, New bill, Bill detail, Tags, Settings; service worker with offline shell and Web Push; Playwright tests in `e2e/` |
 | `packages/config` | Zod env validation; refuses unsafe production config |
 | `packages/core` | `Cents` money maths, bill and session state machines, claim tokens, ledger postings, adapter ports |
 | `packages/db` | SQL migration runner, Kysely, PII crypto (AES-256-GCM + HMAC), seed, queue |

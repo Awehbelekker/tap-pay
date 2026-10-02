@@ -45,8 +45,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     trustProxy: true,
   });
 
-  // Only the merchant PWA origin may call the API from a browser.
-  void app.register(cors, { origin: [deps.config.PUBLIC_WEB_URL], credentials: true });
+  // Only the merchant PWA origin may call the API from a browser. Methods and headers are listed
+  // explicitly: @fastify/cors defaults to GET, HEAD and POST only, which silently broke PUT/PATCH
+  // from the PWA (found by the Playwright tests).
+  void app.register(cors, {
+    origin: [deps.config.PUBLIC_WEB_URL],
+    credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["authorization", "content-type", "idempotency-key", "last-event-id"],
+    maxAge: 600,
+  });
 
   // Liveness: the process is up. No dependencies.
   app.get("/healthz", async () => ({ ok: true }));

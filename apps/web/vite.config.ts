@@ -12,6 +12,11 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       VitePWA({
+        // Our own service worker (src/sw.ts): precache plus Web Push handling.
+        strategies: "injectManifest",
+        srcDir: "src",
+        filename: "sw.ts",
+        injectRegister: "auto",
         registerType: "autoUpdate",
         includeAssets: ["icon.svg"],
         manifest: {
@@ -24,12 +29,11 @@ export default defineConfig(({ mode }) => {
           start_url: "/",
           icons: [{ src: "icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
         },
-        workbox: {
-          // Offline shell only. Bill creation needs a connection (SPEC 15); never cache /v1 API calls.
-          navigateFallbackDenylist: [/^\/v1\//, /^\/t\//, /^\/b\//, /^\/r\//],
-        },
+        injectManifest: { globPatterns: ["**/*.{js,css,html,svg,webmanifest}"] },
+        devOptions: { enabled: false },
       }),
     ],
     server: { port: 5173 },
+    preview: { port: 5173 },
   };
 });

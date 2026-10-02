@@ -83,6 +83,18 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I16 | Presets that would exceed the cap are hidden rather than clamped | A clamped "20%" that is really 15% would mislead the customer | - |
 | I17 | Tip settings are changed in the database for now | The settings screen is part of the manager dashboard (M4/M6) | M4 |
 
+## Implementation choices made in M4 (revisit later)
+
+| # | Choice | Why | Revisit |
+| --- | --- | --- | --- |
+| I18 | Refresh tokens and device id live in the PWA's localStorage, the access token in memory; no httpOnly cookie yet | The PWA and API are on different origins (Vercel and Railway); a cookie needs a shared parent domain and SameSite set-up | M9: move the refresh token to an httpOnly cookie once domains are fixed |
+| I19 | Re-presenting a refresh token within 30 s of its rotation is treated as a retry, not theft | Weak signals lose responses; without this, staff were signed out at random (found by the Playwright tests). Reuse after 30 s still revokes the family | M9 threat model |
+| I20 | SSE takes the access token as `?access_token=` | EventSource cannot set headers. Query strings are stripped from logs; tokens live 15 minutes | - |
+| I21 | Live events fan out with Postgres LISTEN/NOTIFY | Works across several API instances without a new service | M10 load test |
+| I22 | Push without VAPID keys is off, and alerts go by WhatsApp template (`merchant_paid_alert`, `merchant_failed_alert`); SMS is not built | SPEC 12 channel chain; SMS is optional | Meta template approval in M8; SMS if pilots need it |
+| I23 | "Manager daily summary" is a setting (`notify_managers = daily_summary`) but the summary job is not built; daily-summary managers get no per-payment alert | Belongs with reports (M6) | M6 |
+| I24 | Web NFC is used only to read a tag's code for assignment; writing tags is not built | Tags are programmed by the operator (OPEN_QUESTIONS T4) | M10 operator tools |
+
 ## Schema fixes made in M0
 
 See `db/README.md`: `audit_log` trigger ordering, global `opt_outs` with null merchant, truncate guards.

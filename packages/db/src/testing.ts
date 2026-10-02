@@ -1,3 +1,4 @@
+import pg from "pg";
 import { Crypto } from "./crypto.js";
 import { createDb, type DbHandle } from "./db.js";
 import { migrateUp } from "./migrate.js";
@@ -16,4 +17,20 @@ export async function freshTestDb(url: string, crypto: Crypto): Promise<DbHandle
   await migrateUp(h.pool);
   await seed(h.db, crypto);
   return h;
+}
+
+/** Create the database in `url` if it does not exist (connects to the server's "postgres" db). */
+export async function ensureTestDatabase(url: string): Promise<void> {
+  const u = new URL(url);
+  const name = u.pathname.replace(/^\//, "");
+  if (!/^[a-z0-9_]+_test$/.test(name)) throw new Error(`refusing to create non-test database "${name}"`);
+  u.pathname = "/postgres";
+  const c = new pg.Client({ connectionString: u.toString() });
+  await c.connect();
+  try {
+    const r = await c.query("select 1 from pg_database where datname = $1", [name]);
+    if (r.rowCount === 0) await c.query(`create database "${name}"`);
+  } finally {
+    await c.end();
+  }
 }

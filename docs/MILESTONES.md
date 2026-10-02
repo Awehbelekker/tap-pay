@@ -18,7 +18,7 @@ Accept: concurrency test (50 parallel taps on one bill yields exactly one claim)
 Presets, custom tip, no tip, quick-tip bills, limits (max tip percent or amount), tip shown on slip.
 Accept: property tests on tip maths; all tip paths e2e.
 
-## M4 Merchant PWA and notifications
+## M4 Merchant PWA and notifications (done 2026-10-02)
 Auth (OTP + PIN), create/edit/cancel bills, live bill list over SSE, installable PWA, Web NFC read/write for tag assignment (Android) with manual code fallback, Web Push, WhatsApp merchant alerts, notification chain with dedupe.
 Accept: Playwright flows; notification delivered once per event per channel; offline shell loads.
 

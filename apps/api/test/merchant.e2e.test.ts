@@ -92,10 +92,21 @@ describe.skipIf(!url)("merchant API, auth and notifications (e2e)", () => {
       expect((await login("4826")).statusCode).toBe(200);
     });
 
-    it("refresh tokens rotate; re-using an old one revokes the whole family", async () => {
+    it("a refresh retried within 30 s (lost response on a weak signal) still works", async () => {
+      const a = await t.enrol(COACH);
+      const refresh = (rt: string) => t.app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refreshToken: rt } });
+      expect((await refresh(a.refreshToken)).statusCode).toBe(200); // response "lost"
+      t.clock.advance(10_000);
+      const retry = await refresh(a.refreshToken);
+      expect(retry.statusCode).toBe(200);
+      expect((await refresh(retry.json().refreshToken)).statusCode).toBe(200);
+    });
+
+    it("refresh tokens rotate; re-using an old one after 30 s revokes the whole family", async () => {
       const a = await t.enrol(COACH);
       const b = (await t.app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refreshToken: a.refreshToken } })).json();
       expect(b.refreshToken).not.toBe(a.refreshToken);
+      t.clock.advance(31_000);
       expect((await t.app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refreshToken: a.refreshToken } })).statusCode).toBe(401);
       // The thief's reuse also kills the legitimate newer token.
       expect((await t.app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refreshToken: b.refreshToken } })).statusCode).toBe(401);

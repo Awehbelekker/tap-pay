@@ -24,6 +24,11 @@ export const PIN_MAX_FAILURES = 5;
 export const PIN_LOCK_MINUTES = 15;
 export const ACCESS_TTL_SECONDS = 15 * 60;
 export const REFRESH_TTL_DAYS = 30;
+/**
+ * A phone on a weak signal can send a refresh, lose the response and retry with the same token.
+ * Within this window that is a retry, not theft: issue a fresh token in the same family.
+ */
+export const REFRESH_REUSE_GRACE_SECONDS = 30;
 
 export type Role = "owner" | "manager" | "staff";
 
@@ -249,6 +254,9 @@ export class Auth {
       .where("refresh_tokens.token_hash", "=", sha256(token))
       .executeTakeFirst();
     if (!row || row.revoked_at || row.expires_at <= now || !row.active || row.deviceRevokedAt) throw new AuthError("invalid_refresh", 401);
+    if (row.rotated_at && now.getTime() - row.rotated_at.getTime() <= REFRESH_REUSE_GRACE_SECONDS * 1000) {
+      return this.issue({ userId: row.userId, merchantId: row.merchantId, role: row.role, deviceId: row.device_id }, row.family_id);
+    }
     if (row.rotated_at) {
       await db.updateTable("refresh_tokens").set({ revoked_at: now }).where("family_id", "=", row.family_id).where("revoked_at", "is", null).execute();
       await audit(db, { merchantId: row.merchantId, actorKind: "system", actorId: null, action: "auth.refresh_reuse", entity: "device", entityId: row.device_id });
