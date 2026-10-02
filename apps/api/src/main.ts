@@ -2,6 +2,7 @@ import { loadConfig } from "@tappay/config";
 import { createDb } from "@tappay/db";
 import { createQueue } from "@tappay/db/queue";
 import { buildApp } from "./app.js";
+import type { Money } from "./money.js";
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
@@ -9,6 +10,12 @@ const queue = createQueue(config.DATABASE_URL);
 await queue.start();
 
 const app = buildApp({ config, db, queue });
+
+// Jobs that need the API's services run here; apps/worker owns the schedules (06:00 SAST).
+await queue.boss.work("payout.run", async () => {
+  const r = await (app as unknown as { money: Money }).money.runAllPayouts();
+  app.log.info(r, "payout run");
+});
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "shutting down");

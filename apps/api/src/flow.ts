@@ -19,7 +19,6 @@ import {
   offeredPresets,
   parseRands,
   parseTipText,
-  postingsForPayment,
   resolveTip,
   tipCap,
   type TipChoice,
@@ -49,7 +48,6 @@ import {
   getShare,
   insertClaimToken,
   insertPendingPayment,
-  insertPostings,
   latestActiveSession,
   linesTotal,
   listShares,
@@ -74,6 +72,7 @@ import {
   type Database,
 } from "@tappay/db";
 import { isValidTagCode, waMeLink } from "@tappay/tag";
+import { postPayment, staffShares, type Money } from "./money.js";
 import type { FlowEvents } from "./notifier.js";
 import {
   catalogue,
@@ -100,6 +99,8 @@ import {
 export interface FlowDeps {
   /** Live events and staff alerts (M4). Optional so the flow runs without them in tests. */
   events?: FlowEvents;
+  /** Refunds and chargebacks arriving by provider webhook (M5). */
+  money?: Money;
   config: Config;
   db: Kysely<Database>;
   crypto: Crypto;
@@ -793,6 +794,8 @@ export class PayFlow {
     const flag = (trx: Kysely<Database>, merchantId: string, paymentId: string, action: string, detail: Record<string, unknown> = {}) =>
       audit(trx, { merchantId, actorKind: "system", actorId: null, action, entity: "payment", entityId: paymentId, detail });
 
+    if (ev.type === "refund.succeeded" || ev.type === "chargeback") return this.moneyEvent(ev);
+
     const result = await db.transaction().execute(async (trx) => {
       const p = await lockPaymentByProviderRef(trx, provider.name, ev.providerRef);
       if (!p) return { kind: "error" as const, error: "unknown_payment" };
@@ -837,7 +840,17 @@ export class PayFlow {
         }
         const base = cents(p.base ?? 0);
         const tip = cents(p.tip);
-        await insertPostings(trx, p.merchantId, p.id, postingsForPayment({ base, tip, fee: cents(ev.feeCents ?? 0), tipStaffUserId: bill?.assigned_user_id ?? null }));
+        // The split by the merchant's rules (SPEC 8): sale shares, tip rule, fee allocation.
+        const postings = await postPayment(trx, {
+          merchantId: p.merchantId,
+          paymentId: p.id,
+          base,
+          tip,
+          providerFee: ev.feeCents ?? 0,
+          servingStaffUserId: bill?.assigned_user_id ?? null,
+          lines: bill?.lines ?? null,
+          now,
+        });
         const token = newUrlToken();
         const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(now).replaceAll("-", "");
         await createReceipt(trx, { merchantId: p.merchantId, paymentId: p.id, token, number: `R-${day}-${p.id.slice(0, 6).toUpperCase()}` });
@@ -860,6 +873,7 @@ export class PayFlow {
             base,
             tip,
             total: p.amount,
+            shares: staffShares(postings),
           },
         };
       }
@@ -886,6 +900,7 @@ export class PayFlow {
           base: p.base ?? 0,
           tip: p.tip,
           total: p.amount,
+          shares: new Map<string, number>(),
         },
       };
     });
@@ -910,6 +925,22 @@ export class PayFlow {
         await this.send(to, result.customerId, result.merchantId, catalogue.payFailed({ merchant }));
       }
     }
+    return { status: "processed" };
+  }
+
+  /** Refund confirmations and chargebacks from the provider (SPEC 10). */
+  private async moneyEvent(ev: VerifiedEvent): Promise<{ status: "processed" | "ignored" | "failed"; error?: string }> {
+    const { db, provider, money } = this.d;
+    if (!money) return { status: "failed", error: "money_disabled" };
+    const p = await db.selectFrom("payments").select(["id", "merchant_id", "session_id"]).where("provider", "=", provider.name).where("provider_ref", "=", ev.providerRef).executeTakeFirst();
+    if (!p || ev.reference !== p.session_id) return { status: "failed", error: "unknown_payment" };
+    if (ev.type === "chargeback") {
+      await money.chargeback({ merchantId: p.merchant_id, paymentId: p.id, providerEventId: ev.eventId });
+      return { status: "processed" };
+    }
+    const pending = await db.selectFrom("refunds").select("id").where("payment_id", "=", p.id).where("status", "=", "pending").orderBy("created_at").execute();
+    if (pending.length === 0) return { status: "ignored" };
+    for (const r of pending) await money.settleRefund(r.id);
     return { status: "processed" };
   }
 

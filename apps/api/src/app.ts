@@ -8,6 +8,8 @@ import { SimWhatsAppClient } from "@tappay/whatsapp";
 import { Auth } from "./auth.js";
 import { PayFlow } from "./flow.js";
 import { registerMerchantApi } from "./merchantApi.js";
+import { Money } from "./money.js";
+import { registerMoneyApi } from "./moneyApi.js";
 import { Notifier } from "./notifier.js";
 import { DisabledPushClient, WebPushClient } from "./push.js";
 import { loggerOptions } from "./logger.js";
@@ -78,8 +80,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     (config.VAPID_PUBLIC_KEY && config.VAPID_PRIVATE_KEY && config.VAPID_SUBJECT
       ? new WebPushClient({ publicKey: config.VAPID_PUBLIC_KEY, privateKey: config.VAPID_PRIVATE_KEY, subject: config.VAPID_SUBJECT })
       : new DisabledPushClient());
+  // SPEC 8.4: a native split needs a provider that can split at settlement.
+  if (config.SPLIT_STRATEGY === "native" && !adapters.provider.capabilities.nativeSplit) {
+    throw new Error(`SPLIT_STRATEGY=native but provider ${adapters.provider.name} cannot split payments`);
+  }
   const notifier = new Notifier({ db: deps.db.db, crypto: crypto_, wa: adapters.wa, push, log: app.log });
-  const flow = new PayFlow({ config, db: deps.db.db, crypto: crypto_, wa: adapters.wa, provider: adapters.provider, clock, log: app.log, events: notifier });
+  const money = new Money({ config, db: deps.db.db, crypto: crypto_, provider: adapters.provider, clock, log: app.log, alerts: notifier });
+  const flow = new PayFlow({ config, db: deps.db.db, crypto: crypto_, wa: adapters.wa, provider: adapters.provider, clock, log: app.log, events: notifier, money });
   const auth = new Auth({ config, db: deps.db.db, crypto: crypto_, wa: adapters.wa, clock });
 
   // Live events: one LISTEN connection per API process, started on the first SSE subscriber.
@@ -103,10 +110,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (stopListening) await (await stopListening)();
   });
   registerMerchantApi(app, { config, db: deps.db.db, crypto: crypto_, auth, flow, clock, subscribe, vapidPublicKey: config.VAPID_PUBLIC_KEY ?? null });
+  registerMoneyApi(app, { config, db: deps.db.db, crypto: crypto_, auth, money, clock });
   registerRoutes(app, { config: deps.config, db: deps.db, crypto: crypto_, flow, provider: adapters.provider, wa: adapters.wa });
   // The merchant API (M4) authenticates and then calls these flow methods; tests use them directly.
   app.decorate("payFlow", flow);
   app.decorate("auth", auth);
+  app.decorate("money", money);
+  app.decorate("notifier", notifier);
 
   return app;
 }

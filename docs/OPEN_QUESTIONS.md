@@ -94,6 +94,12 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | I22 | Push without VAPID keys is off, and alerts go by WhatsApp template (`merchant_paid_alert`, `merchant_failed_alert`); SMS is not built | SPEC 12 channel chain; SMS is optional | Meta template approval in M8; SMS if pilots need it |
 | I23 | "Manager daily summary" is a setting (`notify_managers = daily_summary`) but the summary job is not built; daily-summary managers get no per-payment alert | Belongs with reports (M6) | M6 |
 | I24 | Web NFC is used only to read a tag's code for assignment; writing tags is not built | Tags are programmed by the operator (OPEN_QUESTIONS T4) | M10 operator tools |
+| I25 | Provider fees are not reversed on a refund; each party keeps its share of the fee debit | Providers generally keep the fee on refunds; to be confirmed per provider | M8 PROVIDER_NOTES |
+| I26 | Payouts are written to the ledger when created; a refund after payout makes the balance negative, which the next payout nets off (never a negative payout) | SPEC 9; a created payout is money committed to that person | - |
+| I27 | Tips with no serving staff and no shift running go to a `pool` ledger party; distributing an old pool balance is not built | SPEC 8.1 says "no staff tied: pool"; who should get a pool with no shift needs a merchant decision | M6 dashboard |
+| I28 | Split rules are sale shares only (basis points); fixed-amount shares per service and pool-by-hours are not built (shift weights stand in for hours) | Covers the SPEC example and pilots; fixed amounts can be added to `SaleShare` without schema change | Pilot feedback |
+| I29 | The `payout.run` job handler lives in the API process (it needs the API's Money service); apps/worker owns the schedule | Avoids a second copy of the money code; pg-boss hands each job to one instance | M10, if the API should stay request-only |
+| I30 | `SPLIT_STRATEGY` is one setting for the deployment; the per-merchant `merchants.split_strategy` column is not read yet | One provider per deployment until M8 | M8 |
 
 ## Schema fixes made in M0
 
@@ -107,4 +113,5 @@ Append entries as `YYYY-MM-DD, question id, decision, reason, who`.
 2026-10-02, -, Migrations are plain SQL files run by a small runner in packages/db (up/down, one transaction each, advisory lock), not Kysely's TS migrator, so the schema stays reviewable SQL, Claude Code
 2026-10-02, -, Apps run TypeScript through tsx in dev and production (no build step) for M0; revisit before pilot if cold start or memory matters, Claude Code
 2026-10-02, O2, Tip step implemented as a list message (see I3), Claude Code
+2026-10-02, -, M5: ledger_only stays the default; collect_then_payout is built and tested against the mock but still refuses to start without FUNDS_FLOW_LEGAL_SIGNOFF, Claude Code
 2026-10-02, O3, Quick-tip presets are per merchant, default R5/R10/R20, shown as a list (see I9), Claude Code

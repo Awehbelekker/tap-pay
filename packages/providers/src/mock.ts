@@ -7,6 +7,8 @@ import {
   type CreateCheckoutInput,
   type PaymentProvider,
   type PaymentStatus,
+  type PayoutDestination,
+  type PayoutResult,
   type RefundResult,
   type VerifiedEvent,
 } from "@tappay/core";
@@ -83,6 +85,14 @@ export class MockPaymentProvider implements PaymentProvider {
     return this.sign(Buffer.from(JSON.stringify(body)));
   }
 
+  /** Simulate the card scheme reversing a payment (a chargeback notice). */
+  chargeback(providerRef: string): SignedWebhook {
+    const c = this.byRef.get(providerRef);
+    if (!c) throw new Error("unknown mock checkout");
+    const body = { id: `evt_${randomUUID()}`, type: "chargeback", reference: c.input.reference, providerRef, amountCents: c.input.amount - c.refundedCents, currency: "ZAR", method: "card", feeCents: 0 };
+    return this.sign(Buffer.from(JSON.stringify(body)));
+  }
+
   sign(rawBody: Buffer): SignedWebhook {
     const sig = createHmac("sha256", this.opts.secret).update(rawBody).digest("hex");
     return { headers: { "content-type": "application/json", [MOCK_SIGNATURE_HEADER]: sig }, rawBody };
@@ -96,7 +106,7 @@ export class MockPaymentProvider implements PaymentProvider {
     if (gotBuf.length !== want.length || !timingSafeEqual(gotBuf, want)) throw new WebhookSignatureError();
     const b = JSON.parse(i.rawBody.toString("utf8")) as Record<string, unknown>;
     const type = String(b.type);
-    if (!["payment.succeeded", "payment.failed", "payment.cancelled"].includes(type)) {
+    if (!["payment.succeeded", "payment.failed", "payment.cancelled", "refund.succeeded", "chargeback"].includes(type)) {
       throw new WebhookSignatureError("unsupported event type");
     }
     return {
@@ -118,7 +128,28 @@ export class MockPaymentProvider implements PaymentProvider {
     return c.status;
   }
 
+  /** Mock payouts: a destination ref starting with "fail" is refused; everything else is sent. */
+  readonly payoutsSent: { to: string; amount: number; reference: string }[] = [];
+  private readonly payoutByIdem = new Map<string, PayoutResult>();
+  async createPayout(i: { to: PayoutDestination; amount: number; reference: string; idempotencyKey: string }): Promise<PayoutResult> {
+    const prior = this.payoutByIdem.get(i.idempotencyKey);
+    if (prior) return prior;
+    const r: PayoutResult = i.to.ref.startsWith("fail") ? { providerRef: "", status: "failed" } : { providerRef: `mock_payout_${randomUUID()}`, status: "sent" };
+    if (r.status === "sent") this.payoutsSent.push({ to: i.to.ref, amount: i.amount, reference: i.reference });
+    this.payoutByIdem.set(i.idempotencyKey, r);
+    return r;
+  }
+
+  private readonly refundByIdem = new Map<string, RefundResult>();
   async refund(i: { providerRef: string; amount: number; reason: string; idempotencyKey: string }): Promise<RefundResult> {
+    const prior = this.refundByIdem.get(i.idempotencyKey);
+    if (prior) return prior;
+    const r = this.doRefund(i);
+    this.refundByIdem.set(i.idempotencyKey, r);
+    return r;
+  }
+
+  private doRefund(i: { providerRef: string; amount: number }): RefundResult {
     const c = this.byRef.get(i.providerRef);
     if (!c || (c.status !== "succeeded" && c.status !== "partially_refunded")) {
       return { providerRefundRef: "", status: "failed" };
@@ -126,6 +157,6 @@ export class MockPaymentProvider implements PaymentProvider {
     if (c.refundedCents + i.amount > c.input.amount) return { providerRefundRef: "", status: "failed" };
     c.refundedCents += i.amount;
     c.status = c.refundedCents === c.input.amount ? "refunded" : "partially_refunded";
-    return { providerRefundRef: `mock_refund_${i.idempotencyKey}`, status: "succeeded" };
+    return { providerRefundRef: `mock_refund_${randomUUID()}`, status: "succeeded" };
   }
 }

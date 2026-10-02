@@ -124,6 +124,8 @@ Compute each non-merchant party's share by flooring `amount × percent`. The mer
 
 `ledger_entries` are append-only. Each payment writes: `bill` credits per party, `tip` credits per party, `provider_fee` debit, `platform_fee` debit. Refunds append reversing entries; nothing is updated or deleted. Balances are derived by summing entries by party and status (`pending`, `available`, `paid_out`).
 
+As built (M5): sale shares are basis points of the sale to "whoever served" or to a named staff member, set as a merchant default or per service (a service with its own rules uses only those). Tips to the pool with no shift running wait on a `pool` line until the operator distributes them (OPEN_QUESTIONS I27). Each refund line records which credit kind it reverses (`reverses`), and the payment keeps `refunded_cents`. Pure maths in `packages/core/src/split.ts`; DB writes in `apps/api/src/money.ts`.
+
 ### 8.4 Split strategies (`SPLIT_STRATEGY`)
 
 | Value | Behaviour | Use |
@@ -140,12 +142,14 @@ The provider adapter exposes `capabilities.nativeSplit` and `capabilities.payout
 - Staff and merchants get a WhatsApp/PWA message when paid out.
 - A refund after payout is netted off the next payout (never negative payout).
 - Reconciliation job compares ledger to provider settlement reports nightly and flags differences.
+- As built (M5): one payout per person per SAST day (idempotency key `payout:{merchant}:{person}:{date}`, plus an advisory lock), written as a `payout` debit when created. `ledger_only` creates a `manual` payout that a manager marks paid after paying by EFT or cash; `collect_then_payout` sends it through the provider to the person's stored destination; a failed payout is credited back (`adjustment`) and logged for the operator. `native` creates none (the provider splits at settlement, M8). Managers can also run payouts from the PWA.
 
 ## 10. Refunds and disputes
 
 - Manager or owner triggers a full or partial refund from the dashboard with a reason.
 - Provider refund is called; on success, append reversing ledger entries (bill and tip lines proportionally) and notify everyone involved.
 - Provider chargeback notice: reverse split lines, flag merchant, notify manager and operator.
+- As built (M5): refunds need an `Idempotency-Key`; at most the unrefunded amount (less pending refunds) can be refunded. Reversals are proportional per credit line, with rounding cents to merchant lines first, so after any sequence of refunds the reversed total equals the refunded total and a full refund reverses every line exactly (property test). Provider fees are not reversed (I25). The customer gets `refund.notice`; affected staff and managers get push or `merchant_refund_alert`. A chargeback reverses whatever is left, once per provider event, and writes a `merchant.flagged_chargeback` audit entry.
 - Customers can message HELP for a menu: Pay a bill, Get my slip, Talk to the merchant.
 
 ## 11. Unpaid bills and reminders

@@ -1,6 +1,8 @@
 import type { FastifyBaseLogger } from "fastify";
 import { cents, formatRands, type PushClient, type PushSubscriptionJson, type WhatsAppClient } from "@tappay/core";
 import { appendMerchantEvent, maskMsisdn, type Crypto, type Database, type Kysely } from "@tappay/db";
+import { catalogue } from "@tappay/whatsapp";
+import type { MoneyAlerts } from "./money.js";
 
 /**
  * Merchant notifications (SPEC 12). Every bill change becomes a live event for the PWA (SSE).
@@ -30,6 +32,8 @@ export interface PaymentAlert {
   base: number;
   tip: number;
   total: number;
+  /** Each staff member's credit from the split, for "your share" (SPEC 12). */
+  shares: Map<string, number>;
 }
 
 export interface NotifierDeps {
@@ -42,7 +46,7 @@ export interface NotifierDeps {
 
 const R = (c: number) => formatRands(cents(c));
 
-export class Notifier implements FlowEvents {
+export class Notifier implements FlowEvents, MoneyAlerts {
   constructor(private readonly d: NotifierDeps) {}
 
   async billChanged(e: { merchantId: string; billId: string; name: string; staffUserId: string | null; createdBy: string | null; payload?: Record<string, unknown> }): Promise<void> {
@@ -59,9 +63,12 @@ export class Notifier implements FlowEvents {
       payload: { paymentId: e.paymentId, baseCents: e.base, tipCents: e.tip, totalCents: e.total, customer: who, createdBy: e.createdBy },
     });
     const merchant = await this.merchantName(e.merchantId);
-    const body = `Paid ${R(e.base)} (${e.description})${e.tip > 0 ? ` + ${R(e.tip)} tip` : ""}. Customer ${who}.`;
+    const body = (userId: string) => {
+      const share = e.shares.get(userId);
+      return `Paid ${R(e.base)} (${e.description})${e.tip > 0 ? ` + ${R(e.tip)} tip` : ""}.${share ? ` Your share ${R(share)}.` : ""} Customer ${who}.`;
+    };
     await this.alert(e, "paid", {
-      push: { title: `${merchant}: paid ${R(e.total)}`, body, billId: e.billId, kind: "paid" },
+      push: (userId) => ({ title: `${merchant}: paid ${R(e.total)}`, body: body(userId), billId: e.billId, kind: "paid" }),
       // MESSAGES.md merchant_paid_alert: "{customer_mask} paid R{base} plus R{tip} tip at {merchant}. Total R{total}."
       template: { name: "merchant_paid_alert", params: [who, R(e.base), R(e.tip), merchant, R(e.total)] },
     });
@@ -77,7 +84,7 @@ export class Notifier implements FlowEvents {
     });
     const merchant = await this.merchantName(e.merchantId);
     await this.alert(e, "failed", {
-      push: { title: `${merchant}: payment did not go through`, body: `${R(e.total)} for ${e.description}. Open the app to follow up.`, billId: e.billId, kind: "failed" },
+      push: () => ({ title: `${merchant}: payment did not go through`, body: `${R(e.total)} for ${e.description}. Open the app to follow up.`, billId: e.billId, kind: "failed" }),
       // MESSAGES.md merchant_failed_alert: "Payment of R{amount} failed or was abandoned at {merchant}. ..."
       template: { name: "merchant_failed_alert", params: [R(e.total), merchant] },
       // Failures go to the staff member only (SPEC 12); managers see them in the PWA.
@@ -96,6 +103,50 @@ export class Notifier implements FlowEvents {
     const masked = `ending ${maskMsisdn(this.d.crypto.decrypt(c.msisdn_enc)).slice(3)}`;
     const first = c.profile_name?.trim().split(/\s+/)[0];
     return first ? `${first}, ${masked}` : masked;
+  }
+
+  /** Refund: the customer is told; staff whose share reverses and managers are alerted (SPEC 12). */
+  async refunded(e: { merchantId: string; refundId: string; paymentId: string; amount: number; staffReversed: Map<string, number>; customerId: string }): Promise<void> {
+    const merchant = await this.merchantName(e.merchantId);
+    await appendMerchantEvent(this.d.db, { merchantId: e.merchantId, name: "payment.refunded", billId: null, userId: null, payload: { paymentId: e.paymentId, amountCents: e.amount } });
+    const c = await this.d.db.selectFrom("customers").select("msisdn_enc").where("id", "=", e.customerId).executeTakeFirst();
+    if (c) {
+      const msg = catalogue.refundNotice({ merchant, amount: cents(e.amount) });
+      try {
+        await this.d.wa.sendText(this.d.crypto.decrypt(c.msisdn_enc), msg.kind === "text" ? msg.body : "");
+      } catch (err) {
+        this.d.log.error({ err: (err as Error).message }, "refund notice failed");
+      }
+    }
+    const users = await this.d.db.selectFrom("users").select(["id", "role", "msisdn_enc", "notify_mute"]).where("merchant_id", "=", e.merchantId).where("active", "=", true).execute();
+    for (const u of users) {
+      const reversed = e.staffReversed.get(u.id);
+      const isManager = u.role === "manager" || u.role === "owner";
+      if (!reversed && !isManager) continue;
+      if (u.notify_mute && !isManager) continue;
+      const dedupe = `refund:${e.refundId}:${u.id}`;
+      const body = `${R(e.amount)} refunded.${reversed ? ` Your share reverses by ${R(reversed)}.` : ""}`;
+      try {
+        const pushed = await this.tryPush(e.merchantId, u.id, dedupe, "refund", { title: `${merchant}: refund`, body, billId: null, kind: "refund" });
+        if (pushed === "not_delivered") {
+          await this.tryWhatsApp(e.merchantId, u.id, dedupe, "refund", { name: "merchant_refund_alert", params: [R(e.amount), merchant, reversed ? R(reversed) : R(0)] }, this.d.crypto.decrypt(u.msisdn_enc));
+        }
+      } catch (err) {
+        this.d.log.error({ err: (err as Error).message }, "refund alert failed");
+      }
+    }
+  }
+
+  /** Payout: "R{amount} in tips is on its way to you from {merchant}" (MESSAGES staff_tip_payout). */
+  async payoutSent(e: { merchantId: string; payoutId: string; userId: string; amount: number }): Promise<void> {
+    const merchant = await this.merchantName(e.merchantId);
+    const u = await this.d.db.selectFrom("users").select("msisdn_enc").where("id", "=", e.userId).executeTakeFirst();
+    if (!u) return;
+    const dedupe = `payout:${e.payoutId}:${e.userId}`;
+    const pushed = await this.tryPush(e.merchantId, e.userId, dedupe, "payout", { title: `${merchant}: paid out ${R(e.amount)}`, body: `${R(e.amount)} is on its way to you.`, billId: null, kind: "payout" });
+    if (pushed === "not_delivered") {
+      await this.tryWhatsApp(e.merchantId, e.userId, dedupe, "payout", { name: "staff_tip_payout", params: [R(e.amount), merchant] }, this.d.crypto.decrypt(u.msisdn_enc));
+    }
   }
 
   private async recipients(e: PaymentAlert, staffOnly: boolean) {
@@ -117,12 +168,12 @@ export class Notifier implements FlowEvents {
   private async alert(
     e: PaymentAlert,
     kind: "paid" | "failed",
-    msg: { push: Record<string, unknown>; template: { name: string; params: string[] }; staffOnly?: boolean },
+    msg: { push: (userId: string) => Record<string, unknown>; template: { name: string; params: string[] }; staffOnly?: boolean },
   ): Promise<void> {
     for (const u of await this.recipients(e, msg.staffOnly ?? false)) {
       const dedupe = `${kind}:${e.paymentId}:${u.id}`;
       try {
-        const pushed = await this.tryPush(e.merchantId, u.id, dedupe, kind, msg.push);
+        const pushed = await this.tryPush(e.merchantId, u.id, dedupe, kind, msg.push(u.id));
         if (pushed !== "not_delivered") continue; // delivered now, or handled before
         await this.tryWhatsApp(e.merchantId, u.id, dedupe, kind, msg.template, this.d.crypto.decrypt(u.msisdn_enc));
       } catch (err) {

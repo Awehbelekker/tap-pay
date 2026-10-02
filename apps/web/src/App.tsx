@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, refresh, session, type Me } from "./api";
 import { BillDetail } from "./screens/BillDetail";
+import { Money } from "./screens/Money";
 import { NewBill } from "./screens/NewBill";
 import { Settings } from "./screens/Settings";
 import { SignIn } from "./screens/SignIn";
@@ -77,6 +78,7 @@ export function App() {
   const bill = /^\/bill\/([0-9a-f-]{36})$/.exec(route);
   if (bill) return <BillDetail id={bill[1]!} go={go} />;
   if (route === "/new") return <NewBill me={me} go={go} />;
+  if (route === "/money") return <Money me={me} go={go} />;
   if (route === "/settings") return <Settings me={me} go={go} />;
   if (route === "/tags" && (me.user.role === "manager" || me.user.role === "owner")) return <Tags go={go} />;
   return <Today me={me} go={go} />;

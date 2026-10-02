@@ -529,7 +529,7 @@ export async function settlePayment(
   return r.numUpdatedRows === 1n;
 }
 
-export async function insertPostings(db: Db, merchantId: string, paymentId: string, postings: Posting[]) {
+export async function insertPostings(db: Db, merchantId: string, paymentId: string, postings: Posting[], refundId: string | null = null) {
   if (postings.length === 0) return;
   await db
     .insertInto("ledger_entries")
@@ -539,13 +539,34 @@ export async function insertPostings(db: Db, merchantId: string, paymentId: stri
         payment_id: paymentId,
         payout_id: null,
         kind: p.kind,
-        party_kind: p.partyKind,
-        party_user_id: p.partyUserId,
+        party_kind: p.party.kind,
+        party_user_id: p.party.kind === "staff" ? p.party.userId : null,
         amount_cents: p.amount,
         note: null,
+        refund_id: refundId,
+        reverses: p.reverses ?? null,
       })),
     )
     .execute();
+}
+
+/** A payment's ledger lines back as core Postings (to compute refund reversals). */
+export async function paymentPostings(db: Db, merchantId: string, paymentId: string): Promise<Posting[]> {
+  const rows = await db
+    .selectFrom("ledger_entries")
+    .select(["kind", "party_kind", "party_user_id", "amount_cents", "reverses"])
+    .where("merchant_id", "=", merchantId)
+    .where("payment_id", "=", paymentId)
+    .orderBy("id")
+    .execute();
+  return rows
+    .filter((r) => r.kind === "sale" || r.kind === "tip" || r.kind === "fee" || r.kind === "platform_fee" || r.kind === "refund")
+    .map((r) => ({
+      kind: r.kind as Posting["kind"],
+      party: r.party_kind === "staff" ? { kind: "staff" as const, userId: r.party_user_id! } : { kind: r.party_kind },
+      amount: r.amount_cents,
+      ...(r.reverses ? { reverses: r.reverses } : {}),
+    }));
 }
 
 export async function createReceipt(db: Db, i: { merchantId: string; paymentId: string; token: string; number: string }) {

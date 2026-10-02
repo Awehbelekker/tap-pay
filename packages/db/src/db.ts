@@ -43,6 +43,11 @@ export interface MerchantsTable {
   tip_max_bp: Generated<number>;
   tip_max_cents: number | null;
   notify_managers: Generated<"each_payment" | "daily_summary" | "off">;
+  tip_rule: Generated<"direct" | "pool" | "house_cut">;
+  tip_house_cut_bp: Generated<number>;
+  fee_policy: Generated<"proportional" | "merchant_absorbs">;
+  platform_fee_bp: Generated<number>;
+  platform_fee_cents: Generated<number>;
   created_at: Generated<Date>;
 }
 
@@ -54,6 +59,8 @@ export interface UsersTable {
   msisdn_enc: Buffer;
   msisdn_hash: Buffer;
   pin_hash: string | null;
+  /** Encrypted provider payout destination (collect_then_payout); never returned by the API. */
+  payout_dest_enc: Buffer | null;
   pin_failures: Generated<number>;
   pin_locked_until: Date | null;
   notify_mute: Generated<boolean>;
@@ -95,6 +102,8 @@ export interface BillLine {
   description: string;
   amountCents: number;
   quantity?: number | undefined;
+  /** Set when the line came from a priced service (per-service split rules). */
+  serviceId?: string | undefined;
 }
 
 export interface BillsTable {
@@ -181,6 +190,7 @@ export interface PaymentsTable {
   status: Generated<"pending" | "succeeded" | "failed" | "cancelled" | "refunded" | "partially_refunded">;
   method: string | null;
   provider_fee_cents: number | null;
+  refunded_cents: Generated<number>;
   raw: ColumnType<unknown, string | null, string | null> | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
@@ -191,11 +201,13 @@ export interface LedgerEntriesTable {
   merchant_id: string;
   payment_id: string | null;
   payout_id: string | null;
-  kind: "sale" | "tip" | "fee" | "refund" | "payout" | "adjustment";
+  kind: "sale" | "tip" | "fee" | "platform_fee" | "refund" | "payout" | "adjustment";
   party_kind: "merchant" | "staff" | "pool";
   party_user_id: string | null;
   amount_cents: number;
   note: string | null;
+  refund_id: string | null;
+  reverses: "sale" | "tip" | null;
   created_at: Generated<Date>;
 }
 
@@ -311,7 +323,68 @@ export interface IdempotencyKeysTable {
   created_at: Generated<Date>;
 }
 
+export interface SplitRulesTable {
+  id: Generated<string>;
+  merchant_id: string;
+  applies_to: "sale" | "tip";
+  service_id: string | null;
+  user_id: string | null;
+  party_kind: "merchant" | "staff" | "pool";
+  party_user_id: string | null;
+  basis_points: number;
+  active: Generated<boolean>;
+}
+
+export interface ShiftsTable {
+  id: Generated<string>;
+  merchant_id: string;
+  starts_at: Date;
+  ends_at: Date | null;
+  tip_pool: Generated<boolean>;
+}
+
+export interface ShiftMembersTable {
+  shift_id: string;
+  user_id: string;
+  weight: Generated<number>;
+}
+
+export interface PayoutsTable {
+  id: Generated<string>;
+  merchant_id: string;
+  party_user_id: string | null;
+  amount_cents: number;
+  status: Generated<"pending" | "sent" | "failed" | "cancelled">;
+  provider_ref: string | null;
+  idempotency_key: string;
+  method: Generated<"manual" | "provider" | "native_split">;
+  failure_reason: string | null;
+  created_by: string | null;
+  created_at: Generated<Date>;
+  settled_at: Date | null;
+}
+
+export interface RefundsTable {
+  id: Generated<string>;
+  merchant_id: string;
+  payment_id: string;
+  amount_cents: number;
+  reason: string;
+  kind: Generated<"refund" | "chargeback">;
+  status: Generated<"pending" | "succeeded" | "failed">;
+  provider_ref: string | null;
+  idempotency_key: string;
+  created_by: string | null;
+  created_at: Generated<Date>;
+  settled_at: Date | null;
+}
+
 export interface Database {
+  split_rules: SplitRulesTable;
+  shifts: ShiftsTable;
+  shift_members: ShiftMembersTable;
+  payouts: PayoutsTable;
+  refunds: RefundsTable;
   devices: DevicesTable;
   otp_codes: OtpCodesTable;
   refresh_tokens: RefreshTokensTable;

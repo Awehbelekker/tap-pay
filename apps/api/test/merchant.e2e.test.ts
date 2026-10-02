@@ -261,7 +261,7 @@ describe.skipIf(!url)("merchant API, auth and notifications (e2e)", () => {
 
       expect(t.push.sent).toHaveLength(1);
       expect(t.push.sent[0]).toMatchObject({ endpoint: "https://push.example/coach", payload: { title: "Demo Surf School: paid R550,00", kind: "paid" } });
-      expect((t.push.sent[0]!.payload as any).body).toBe("Paid R500,00 (Beginner lesson) + R50,00 tip. Customer Test, ending 001.");
+      expect((t.push.sent[0]!.payload as any).body).toBe("Paid R500,00 (Beginner lesson) + R50,00 tip. Your share R50,00. Customer Test, ending 001.");
       const wa = t.wa.messagesTo(MANAGER).filter((m) => m.kind === "template" && m.template === "merchant_paid_alert");
       expect(wa).toHaveLength(1);
       expect((wa[0] as any).params).toEqual(["Test, ending 001", "R500,00", "R50,00", "Demo Surf School", "R550,00"]);

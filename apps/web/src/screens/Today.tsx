@@ -71,6 +71,9 @@ export function Today({ me, go }: { me: Me; go: (path: string) => void }) {
       <BillList title="Waiting" bills={live} go={go} empty="No open bills." />
       <BillList title="Recent" bills={recent} go={go} empty="Nothing yet today." />
 
+      <Button variant="secondary" onClick={() => go("/money")}>
+        Money
+      </Button>
       {(me.user.role === "manager" || me.user.role === "owner") && (
         <Button variant="secondary" onClick={() => go("/tags")}>
           Tags

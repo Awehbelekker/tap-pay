@@ -63,7 +63,7 @@ async function enrol(page: Page, msisdn: string, pin = "4826") {
 }
 
 // Sign-in codes are limited to 3 per number per 15 minutes, so the tests share the two
-// seeded staff: the coach signs in twice and the manager twice.
+// seeded staff: each signs in three times.
 
 test("coach signs in, creates a bill and sees it paid live", async ({ page, request }) => {
   await enrol(page, COACH);
@@ -140,8 +140,49 @@ test("a manager assigns a tag by typing the code from the sticker", async ({ pag
   await expect(page.getByRole("alert")).toHaveText("No tag with that code belongs to this business.");
 });
 
-test("the app shell opens offline", async ({ page, context }) => {
+test("a manager refunds part of a payment, sets the split and pays the coach's tips", async ({ page, request }) => {
   await enrol(page, MANAGER, "5937");
+  await page.getByRole("button", { name: "Money" }).click();
+  await expect(page.getByRole("heading", { name: "Money" })).toBeVisible();
+
+  // The R550 payment from the first test: coach's R50 tip less their share of the card fee.
+  const coachRow = page.getByLabel("Staff balances").getByRole("listitem").filter({ hasText: "Sipho" });
+  await expect(coachRow).toContainText("R48,55");
+  const payment = page.locator("[data-payment]").filter({ hasText: "Beginner lesson" });
+  await expect(payment).toContainText("R550,00");
+  await payment.getByRole("button", { name: "Refund" }).click();
+  await payment.getByLabel("Refund amount").fill("110");
+  await payment.getByLabel("Reason").fill("Lesson cut short");
+  await payment.getByRole("button", { name: /^Refund/ }).last().click();
+  await expect(page.getByRole("status")).toHaveText("Refunded R110,00. The customer has been told on WhatsApp.");
+  await expect(payment).toContainText("refunded R110,00");
+  // 20% refunded: the coach gives back 20% of their tip.
+  await expect(coachRow).toContainText("R38,55");
+  expect((await customerOutbox(request, "27821119001")).map((m) => m.body ?? "")).toContain("R110,00 was refunded by Demo Surf School. It can take a few days to show.");
+  await shot(page, "m5-1-money");
+
+  await page.getByLabel("Serving staff's share of each sale (%)").fill("70");
+  await page.getByLabel("Minimum payout (R)").fill("10");
+  await page.getByRole("button", { name: "Save split" }).click();
+  await expect(page.getByRole("status")).toHaveText("Split saved. It applies to payments from now on.");
+
+  await page.getByRole("button", { name: "Create today's payouts" }).click();
+  await expect(page.getByRole("status")).toHaveText("1 payout created.");
+  await expect(coachRow).toContainText("R0,00");
+  await page.getByRole("button", { name: "Mark paid" }).click();
+  await expect(page.getByRole("status")).toHaveText("Marked R38,55 to Sipho as paid.");
+  await expect(page.getByLabel("Payouts")).toContainText("Paid");
+  await shot(page, "m5-2-payouts");
+  const coachMsgs = (await (await request.get(`${E2E.apiUrl}/sim/outbox?to=${intl(COACH)}`)).json()).items as { kind: string; template?: string }[];
+  expect(coachMsgs.filter((m) => m.kind === "template" && m.template === "staff_tip_payout")).toHaveLength(1);
+
+  // The split survives a reload.
+  await page.reload();
+  await expect(page.getByLabel("Serving staff's share of each sale (%)")).toHaveValue("70");
+});
+
+test("the app shell opens offline", async ({ page, context }) => {
+  await enrol(page, COACH);
   // Wait until the service worker controls the page, so the shell is precached.
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;

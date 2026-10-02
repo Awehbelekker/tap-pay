@@ -44,11 +44,14 @@ Rules: max 3, max 1 per day, 08:00 to 20:00 SAST only, cancelled the moment the 
 
 ## Merchant templates
 
+Money parameters are sent already formatted ("R1 234,50"), so the template bodies carry no "R".
+
 | Template | Body |
 | --- | --- |
-| `merchant_paid_alert` | "{customer_mask} paid R{base} plus R{tip} tip at {merchant}. Total R{total}." |
-| `merchant_failed_alert` | "Payment of R{amount} failed or was abandoned at {merchant}. Open the app to follow up." |
-| `staff_tip_payout` | "R{amount} in tips is on its way to you from {merchant}." |
+| `merchant_paid_alert` | "{customer_mask} paid {base} plus {tip} tip at {merchant}. Total {total}." |
+| `merchant_failed_alert` | "Payment of {amount} failed or was abandoned at {merchant}. Open the app to follow up." |
+| `merchant_refund_alert` | "{amount} was refunded at {merchant}. Your share goes down by {share}." |
+| `staff_tip_payout` | "{amount} in tips is on its way to you from {merchant}." |
 | `otp` | "{code} is your {product} sign-in code. It expires in 10 minutes." |
 
 ## Slip (PNG) fields

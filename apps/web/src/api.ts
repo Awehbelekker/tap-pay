@@ -218,3 +218,55 @@ export const serviceCache = {
     write("tp.services", JSON.stringify(items));
   },
 };
+
+export interface Balance {
+  partyKind: "merchant" | "staff" | "pool";
+  userId: string | null;
+  name: string | null;
+  earnedCents: number;
+  tipCents: number;
+  refundedCents: number;
+  feeCents: number;
+  paidOutCents: number;
+  adjustmentCents: number;
+  balanceCents: number;
+}
+
+export interface Payout {
+  id: string;
+  userId: string | null;
+  name: string | null;
+  amountCents: number;
+  status: "pending" | "sent" | "failed";
+  method: string;
+  failureReason: string | null;
+  createdAt: string;
+  settledAt: string | null;
+}
+
+export interface Payment {
+  id: string;
+  billId: string | null;
+  description: string;
+  amountCents: number;
+  baseCents: number;
+  tipCents: number;
+  refundedCents: number;
+  providerFeeCents: number;
+  status: "succeeded" | "partially_refunded" | "refunded";
+  paidAt: string;
+  maskedCustomer: string | null;
+}
+
+export interface MoneySettings {
+  tipRule: "direct" | "pool" | "house_cut";
+  tipHouseCutBp: number;
+  feePolicy: "proportional" | "merchant_absorbs";
+  payoutThresholdCents: number;
+}
+
+export interface SplitRule {
+  serviceId: string | null;
+  staffUserId: string | null;
+  basisPoints: number;
+}

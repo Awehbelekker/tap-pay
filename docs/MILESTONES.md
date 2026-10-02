@@ -22,7 +22,7 @@ Accept: property tests on tip maths; all tip paths e2e.
 Auth (OTP + PIN), create/edit/cancel bills, live bill list over SSE, installable PWA, Web NFC read/write for tag assignment (Android) with manual code fallback, Web Push, WhatsApp merchant alerts, notification chain with dedupe.
 Accept: Playwright flows; notification delivered once per event per channel; offline shell loads.
 
-## M5 Money
+## M5 Money (done 2026-10-02)
 Split rules UI and API, ledger postings, rounding rules, split strategies (`ledger_only` default, `native` and `collect_then_payout` behind adapters and flags), balances, refunds (full and partial) with reverse postings, payout run with threshold, staff payout notice.
 Accept: ledger sums to payment amount for every scenario (property test); ledger is append-only (DB trigger test); refund reverses splits; payout idempotent.
 

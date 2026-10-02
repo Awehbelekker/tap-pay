@@ -50,28 +50,75 @@ components:
         shares: {type: array, items: {type: object, properties: {label: {type: string}, amountCents: {$ref: '#/components/schemas/Cents'}}}}
     Payment:
       type: object
+      required: [id, description, amountCents, baseCents, tipCents, refundedCents, status, paidAt]
       properties:
         id: {type: string, format: uuid}
-        billId: {type: string, format: uuid}
+        billId: {type: [string, 'null'], format: uuid}
+        description: {type: string}
         amountCents: {$ref: '#/components/schemas/Cents'}
+        baseCents: {$ref: '#/components/schemas/Cents'}
         tipCents: {$ref: '#/components/schemas/Cents'}
-        status: {type: string}
-        method: {type: string}
+        refundedCents: {$ref: '#/components/schemas/Cents'}
+        providerFeeCents: {type: [integer, 'null']}
+        status: {type: string, enum: [succeeded, partially_refunded, refunded]}
+        method: {type: [string, 'null']}
         paidAt: {type: string, format: date-time}
+        maskedCustomer: {type: [string, 'null']}
+    Balance:
+      type: object
+      description: Ledger totals for one party (signed cents). balanceCents is what is owed now.
+      required: [partyKind, earnedCents, tipCents, refundedCents, feeCents, paidOutCents, adjustmentCents, balanceCents]
+      properties:
+        partyKind: {type: string, enum: [merchant, staff, pool]}
+        userId: {type: [string, 'null'], format: uuid}
+        name: {type: [string, 'null']}
+        earnedCents: {type: integer}
+        tipCents: {type: integer}
+        refundedCents: {type: integer}
+        feeCents: {type: integer}
+        paidOutCents: {type: integer}
+        adjustmentCents: {type: integer}
+        balanceCents: {type: integer}
+    Payout:
+      type: object
+      required: [id, amountCents, status, method, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        userId: {type: [string, 'null'], format: uuid}
+        name: {type: [string, 'null']}
+        amountCents: {$ref: '#/components/schemas/Cents'}
+        status: {type: string, enum: [pending, sent, failed]}
+        method: {type: string, enum: [manual, provider, native_split]}
+        failureReason: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        settledAt: {type: [string, 'null'], format: date-time}
     Tokens:
       type: object
       required: [accessToken, refreshToken, deviceId, expiresIn]
       properties: {accessToken: {type: string}, refreshToken: {type: string}, deviceId: {type: string, format: uuid}, expiresIn: {type: integer}}
     SplitRule:
       type: object
-      required: [appliesTo, partyKind, basisPoints]
+      description: A staff share of the sale, in basis points. staffUserId null means whoever served. serviceId null is the merchant default; a service with its own rules uses only those. The merchant keeps the rest.
+      required: [serviceId, staffUserId, basisPoints]
       properties:
         id: {type: string, format: uuid}
-        appliesTo: {type: string, enum: [sale, tip]}
-        serviceId: {type: string, format: uuid}
-        partyKind: {type: string, enum: [merchant, staff, pool]}
-        partyUserId: {type: string, format: uuid}
+        serviceId: {type: [string, 'null'], format: uuid}
+        staffUserId: {type: [string, 'null'], format: uuid}
         basisPoints: {type: integer, minimum: 0, maximum: 10000}
+    MerchantSettings:
+      type: object
+      properties:
+        tipsEnabled: {type: boolean}
+        tipPresets: {type: array, items: {type: integer}}
+        tipMinCents: {type: integer}
+        tipMaxBp: {type: integer}
+        tipMaxCents: {type: [integer, 'null']}
+        tipRule: {type: string, enum: [direct, pool, house_cut]}
+        tipHouseCutBp: {type: integer, minimum: 0, maximum: 10000}
+        feePolicy: {type: string, enum: [proportional, merchant_absorbs]}
+        payoutThresholdCents: {type: integer, minimum: 0}
+        notifyManagers: {type: string, enum: [each_payment, daily_summary, off]}
+        quickTipPresetsCents: {type: array, items: {type: integer}}
   parameters:
     IdemKey: {name: Idempotency-Key, in: header, required: false, schema: {type: string}}
   responses:
@@ -192,22 +239,44 @@ paths:
     put: {tags: [merchant], security: [{bearer: []}], summary: Manager assigns a tag provisioned to this merchant to a person (or none, for a till or table), parameters: [{name: code, in: path, required: true, schema: {type: string}}], requestBody: {content: {application/json: {schema: {type: object, required: [assignedUserId], properties: {assignedUserId: {type: [string, 'null'], format: uuid}, label: {type: string}}}}}}, responses: {'200': {description: assigned}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/tags/{code}/revoke: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: code, in: path, required: true, schema: {type: string}}], responses: {'200': {description: revoked}}}}
   /v1/merchant/split-rules:
-    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/SplitRule'}}}}}}}
-    put: {tags: [merchant], security: [{bearer: []}], summary: Replace rule set. Each applies_to group must total 10000 bp., responses: {'200': {description: saved}, '422': {$ref: '#/components/responses/Err'}}}
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/SplitRule'}}}}}}}}}
+    put: {tags: [merchant], security: [{bearer: []}], summary: Replace the sale split rules (manager). Staff shares per scope may not exceed 10000 bp. Applies to new payments only., requestBody: {required: true, content: {application/json: {schema: {type: object, required: [rules], properties: {rules: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/SplitRule'}}}}}}}, responses: {'200': {description: saved}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '422': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/payments:
-    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Payment'}}}}}}}
+    get: {tags: [merchant], security: [{bearer: []}], summary: Confirmed payments, newest first. Staff see payments on their own bills., parameters: [{name: limit, in: query, schema: {type: integer, maximum: 200}}], responses: {'200': {description: list, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/Payment'}}}}}}}}}
   /v1/merchant/payments/{id}/refund:
-    post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}, {$ref: '#/components/parameters/IdemKey'}], responses: {'202': {description: refund started}}}
-  /v1/merchant/payouts: {get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}}
-  /v1/merchant/balances: {get: {tags: [merchant], security: [{bearer: []}], summary: Ledger balances per party, responses: {'200': {description: balances}}}}
+    post:
+      tags: [merchant]
+      security: [{bearer: []}]
+      summary: Refund all (amountCents omitted) or part of a payment (manager). Reverses the split in proportion. Idempotency-Key is required.
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 8, maxLength: 100}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {amountCents: {type: integer, minimum: 1}, reason: {type: string, minLength: 3, maxLength: 200}}}}}}
+      responses:
+        '200': {description: refunded, content: {application/json: {schema: {type: object, properties: {id: {type: string, format: uuid}, amountCents: {type: integer}, status: {type: string, enum: [pending, succeeded, failed]}}}}}}
+        '202': {description: refund started; the provider confirms by webhook}
+        '400': {$ref: '#/components/responses/Err'}
+        '404': {$ref: '#/components/responses/Err'}
+        '409': {$ref: '#/components/responses/Err'}
+        '422': {$ref: '#/components/responses/Err'}
+        '502': {$ref: '#/components/responses/Err'}
+  /v1/merchant/payouts: {get: {tags: [merchant], security: [{bearer: []}], summary: Payouts, newest first. Staff see their own., responses: {'200': {description: list, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/Payout'}}}}}}}}}}
+  /v1/merchant/payouts/run: {post: {tags: [merchant], security: [{bearer: []}], summary: Run today's payouts now (manager). One per person per SAST day at or above the threshold; the worker runs this at 06:00., responses: {'200': {description: counts, content: {application/json: {schema: {type: object, properties: {created: {type: integer}, sent: {type: integer}, failed: {type: integer}}}}}}}}}
+  /v1/merchant/payouts/{id}/mark-paid: {post: {tags: [merchant], security: [{bearer: []}], summary: Record that a pending payout was paid (manager); the staff member is told., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/balances: {get: {tags: [merchant], security: [{bearer: []}], summary: Ledger balances per party. Staff see only their own., responses: {'200': {description: balances, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/Balance'}}}}}}}}}}
+  /v1/merchant/staff/{id}/payout-destination: {put: {tags: [merchant], security: [{bearer: []}], summary: Set where a staff member's provider payouts go (manager). Stored encrypted; never returned., parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], requestBody: {required: true, content: {application/json: {schema: {type: object, required: [ref], properties: {ref: {type: string, minLength: 3, maxLength: 200}}}}}}, responses: {'200': {description: saved}, '404': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/shifts/current:
+    get: {tags: [merchant], security: [{bearer: []}], summary: The running tip-pool shift and its members, responses: {'200': {description: shift}, '404': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/shifts:
+    post: {tags: [merchant], security: [{bearer: []}], summary: Start a tip-pool shift (manager); ends any running one. Weight is each member's share of pooled tips., requestBody: {required: true, content: {application/json: {schema: {type: object, required: [members], properties: {members: {type: array, minItems: 1, items: {type: object, required: [userId], properties: {userId: {type: string, format: uuid}, weight: {type: integer, minimum: 1, maximum: 100}}}}}}}}}, responses: {'201': {description: started}}}
+  /v1/merchant/shifts/current/end:
+    post: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: ended}, '404': {$ref: '#/components/responses/Err'}}}
   /v1/merchant/reports/summary: {get: {tags: [merchant], security: [{bearer: []}], parameters: [{name: from, in: query, schema: {type: string, format: date}}, {name: to, in: query, schema: {type: string, format: date}}], responses: {'200': {description: totals}}}}
   /v1/merchant/reports/export.csv: {get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: csv}}}}
   /v1/merchant/devices:
     get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
     post: {tags: [merchant], security: [{bearer: []}], summary: Register push subscription, responses: {'201': {description: ok}}}
   /v1/merchant/settings:
-    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: settings}}}
-    patch: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: saved}}}
+    get: {tags: [merchant], security: [{bearer: []}], summary: Tip and money settings, responses: {'200': {description: settings, content: {application/json: {schema: {$ref: '#/components/schemas/MerchantSettings'}}}}}}
+    patch: {tags: [merchant], security: [{bearer: []}], summary: Change some settings (manager), requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MerchantSettings'}}}}, responses: {'200': {description: saved}, '422': {$ref: '#/components/responses/Err'}}}
 
   /v1/operator/merchants:
     get: {tags: [operator], security: [{bearer: []}], responses: {'200': {description: list}}}

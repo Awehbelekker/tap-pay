@@ -1387,12 +1387,14 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["SplitRule"][];
+                        "application/json": {
+                            items?: components["schemas"]["SplitRule"][];
+                        };
                     };
                 };
             };
         };
-        /** Replace rule set. Each applies_to group must total 10000 bp. */
+        /** Replace the sale split rules (manager). Staff shares per scope may not exceed 10000 bp. Applies to new payments only. */
         put: {
             parameters: {
                 query?: never;
@@ -1400,7 +1402,13 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        rules: components["schemas"]["SplitRule"][];
+                    };
+                };
+            };
             responses: {
                 /** @description saved */
                 200: {
@@ -1409,6 +1417,8 @@ export interface paths {
                     };
                     content?: never;
                 };
+                403: components["responses"]["Err"];
+                404: components["responses"]["Err"];
                 422: components["responses"]["Err"];
             };
         };
@@ -1426,9 +1436,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Confirmed payments */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    limit?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -1441,7 +1454,9 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Payment"][];
+                        "application/json": {
+                            items?: components["schemas"]["Payment"][];
+                        };
                     };
                 };
             };
@@ -1463,26 +1478,54 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Refund all (amountCents omitted) or part of a payment (manager). Reverses the split in proportion. Idempotency-Key is required. */
         post: {
             parameters: {
                 query?: never;
-                header?: {
-                    "Idempotency-Key"?: components["parameters"]["IdemKey"];
+                header: {
+                    "Idempotency-Key": string;
                 };
                 path: {
                     id: string;
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        amountCents?: number;
+                        reason: string;
+                    };
+                };
+            };
             responses: {
-                /** @description refund started */
+                /** @description refunded */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id?: string;
+                            amountCents?: number;
+                            /** @enum {string} */
+                            status?: "pending" | "succeeded" | "failed";
+                        };
+                    };
+                };
+                /** @description refund started; the provider confirms by webhook */
                 202: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
+                400: components["responses"]["Err"];
+                404: components["responses"]["Err"];
+                409: components["responses"]["Err"];
+                422: components["responses"]["Err"];
+                502: components["responses"]["Err"];
             };
         };
         delete?: never;
@@ -1498,6 +1541,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Payouts */
         get: {
             parameters: {
                 query?: never;
@@ -1512,12 +1556,94 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["Payout"][];
+                        };
+                    };
                 };
             };
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/payouts/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run today's payouts now (manager). One per person per SAST day at or above the threshold; the worker runs this at 06:00. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description counts */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            created?: number;
+                            sent?: number;
+                            failed?: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/payouts/{id}/mark-paid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record that a pending payout was paid (manager); the staff member is told. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Err"];
+                409: components["responses"]["Err"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1531,7 +1657,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Ledger balances per party */
+        /** Ledger balances per party. Staff see only their own. */
         get: {
             parameters: {
                 query?: never;
@@ -1546,12 +1672,172 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["Balance"][];
+                        };
+                    };
                 };
             };
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/staff/{id}/payout-destination": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set where a staff member's provider payouts go (manager). Stored encrypted; never returned. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        ref: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Err"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/shifts/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The running tip-pool shift and its members */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description shift */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Err"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/shifts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a tip-pool shift (manager); ends any running one. Weight is each member's share of pooled tips. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        members: {
+                            /** Format: uuid */
+                            userId: string;
+                            weight?: number;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description started */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merchant/shifts/current/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ended */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Err"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1685,6 +1971,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Tip and money settings */
         get: {
             parameters: {
                 query?: never;
@@ -1699,7 +1986,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["MerchantSettings"];
+                    };
                 };
             };
         };
@@ -1708,6 +1997,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        /** Change some settings (manager) */
         patch: {
             parameters: {
                 query?: never;
@@ -1715,7 +2005,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MerchantSettings"];
+                };
+            };
             responses: {
                 /** @description saved */
                 200: {
@@ -1724,6 +2018,7 @@ export interface paths {
                     };
                     content?: never;
                 };
+                422: components["responses"]["Err"];
             };
         };
         trace?: never;
@@ -1938,15 +2233,53 @@ export interface components {
         };
         Payment: {
             /** Format: uuid */
-            id?: string;
+            id: string;
             /** Format: uuid */
-            billId?: string;
-            amountCents?: components["schemas"]["Cents"];
-            tipCents?: components["schemas"]["Cents"];
-            status?: string;
-            method?: string;
+            billId?: string | null;
+            description: string;
+            amountCents: components["schemas"]["Cents"];
+            baseCents: components["schemas"]["Cents"];
+            tipCents: components["schemas"]["Cents"];
+            refundedCents: components["schemas"]["Cents"];
+            providerFeeCents?: number | null;
+            /** @enum {string} */
+            status: "succeeded" | "partially_refunded" | "refunded";
+            method?: string | null;
             /** Format: date-time */
-            paidAt?: string;
+            paidAt: string;
+            maskedCustomer?: string | null;
+        };
+        /** @description Ledger totals for one party (signed cents). balanceCents is what is owed now. */
+        Balance: {
+            /** @enum {string} */
+            partyKind: "merchant" | "staff" | "pool";
+            /** Format: uuid */
+            userId?: string | null;
+            name?: string | null;
+            earnedCents: number;
+            tipCents: number;
+            refundedCents: number;
+            feeCents: number;
+            paidOutCents: number;
+            adjustmentCents: number;
+            balanceCents: number;
+        };
+        Payout: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            userId?: string | null;
+            name?: string | null;
+            amountCents: components["schemas"]["Cents"];
+            /** @enum {string} */
+            status: "pending" | "sent" | "failed";
+            /** @enum {string} */
+            method: "manual" | "provider" | "native_split";
+            failureReason?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            settledAt?: string | null;
         };
         Tokens: {
             accessToken: string;
@@ -1955,18 +2288,31 @@ export interface components {
             deviceId: string;
             expiresIn: number;
         };
+        /** @description A staff share of the sale, in basis points. staffUserId null means whoever served. serviceId null is the merchant default; a service with its own rules uses only those. The merchant keeps the rest. */
         SplitRule: {
             /** Format: uuid */
             id?: string;
-            /** @enum {string} */
-            appliesTo: "sale" | "tip";
             /** Format: uuid */
-            serviceId?: string;
-            /** @enum {string} */
-            partyKind: "merchant" | "staff" | "pool";
+            serviceId: string | null;
             /** Format: uuid */
-            partyUserId?: string;
+            staffUserId: string | null;
             basisPoints: number;
+        };
+        MerchantSettings: {
+            tipsEnabled?: boolean;
+            tipPresets?: number[];
+            tipMinCents?: number;
+            tipMaxBp?: number;
+            tipMaxCents?: number | null;
+            /** @enum {string} */
+            tipRule?: "direct" | "pool" | "house_cut";
+            tipHouseCutBp?: number;
+            /** @enum {string} */
+            feePolicy?: "proportional" | "merchant_absorbs";
+            payoutThresholdCents?: number;
+            /** @enum {string} */
+            notifyManagers?: "each_payment" | "daily_summary" | "off";
+            quickTipPresetsCents?: number[];
         };
     };
     responses: {

@@ -8,6 +8,7 @@ import {
   maskMsisdn,
   merchantEventsSince,
   todaySummary,
+  type BillLine,
   type Crypto,
   type Database,
   type Kysely,
@@ -204,14 +205,14 @@ export function registerMerchantApi(app: FastifyInstance, d: MerchantApiDeps): v
       }
     }
 
-    let lines = b.data.lines;
+    let lines: BillLine[] | undefined = b.data.lines;
     if (b.data.serviceId) {
       const svc = await db.selectFrom("services").select(["name", "price_cents"]).where("merchant_id", "=", s.merchantId).where("id", "=", b.data.serviceId).where("active", "=", true).executeTakeFirst();
       if (!svc) {
         if (scopedKey) await db.deleteFrom("idempotency_keys").where("key", "=", scopedKey).execute();
         return reply.code(404).send({ code: "not_found", message: "service not found" });
       }
-      lines = [{ description: svc.name, amountCents: svc.price_cents }];
+      lines = [{ description: svc.name, amountCents: svc.price_cents, serviceId: b.data.serviceId }];
     }
     try {
       const created = await flow.createBill({

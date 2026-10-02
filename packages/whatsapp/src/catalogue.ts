@@ -243,6 +243,11 @@ export const catalogue = {
     return { kind: "text", body: `${i.merchant} changed the amount on your bill. Please check it again before you pay.` };
   },
 
+  /** MESSAGES.md refund.notice */
+  refundNotice(i: { merchant: string; amount: Cents }): OutMessage {
+    return { kind: "text", body: `${R(i.amount)} was refunded by ${i.merchant}. It can take a few days to show.` };
+  },
+
   stopOk(): OutMessage {
     return { kind: "text", body: "Done. You will not get reminders from us." };
   },
