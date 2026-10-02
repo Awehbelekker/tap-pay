@@ -1,0 +1,21 @@
+# Local dependencies only. Run the apps with `pnpm dev` on the host.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tappay
+      POSTGRES_PASSWORD: tappay
+      POSTGRES_DB: tappay
+      TZ: Africa/Johannesburg
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/docker-init.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tappay"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  pgdata:
