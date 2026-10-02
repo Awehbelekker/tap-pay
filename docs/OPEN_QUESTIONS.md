@@ -49,6 +49,19 @@ The pack (`docs/*.md`) is used as the source of truth until the owner decides. E
 | O3 | Quick-tip presets | R20 / R50 / Other (MESSAGES) and R5/R10/R20 (SPEC 3) | R5, R10, R20; Other | Per-merchant config; seed R5/R10/R20 |
 | O4 | Late webhook fallback | `reconcile.payments` every 15 min for sessions pending over 5 min | Poll the provider after 60 seconds | Add a targeted 60 s status poll per session in M1 |
 
+| O6 | Session times out before payment | Bill `claimed → open` (release, or claim idle for SESSION_TTL) and also `claimed → abandoned` (customer left) | Same two rules | M1 releases to `open`. M7 decides when a timed-out claim becomes `abandoned` and starts reminders |
+
+## Implementation choices made in M1 (revisit later)
+
+| # | Choice | Why | Revisit |
+| --- | --- | --- | --- |
+| I1 | Inbound WhatsApp and provider webhooks are processed in the request, not via a queue | Simple and fast at pilot volume; every handler is idempotent and de-duplicated by `webhook_events` | M10 load test; move to pg-boss if p95 webhook time exceeds 300 ms |
+| I2 | `webhook_events.payload` keeps only non-PII fields (kind, provider ref, amount), not the raw body | Raw WhatsApp bodies contain numbers and names in plain text (POPIA) | `webhook.replay` (M9) needs raw bodies: store them encrypted with `crypto.ts` |
+| I3 | Tip step uses a list (No tip, presets, Other amount), resolving O2 provisionally | Keeps "No tip" one tap away and fits more than 3 options | Owner to confirm |
+| I4 | Custom tip limits: R1,00 minimum, 100% of the bill maximum | SPEC 7 defaults | Per-merchant cap in M3 |
+| I5 | NTAG424 tags are refused at `/t/` until SDM verification ships (M9); only static tags work, and only outside production unless `ALLOW_STATIC_TAGS=true` | Never accept an unverified tap | M9 |
+| I6 | Fee absorbed by the merchant; tip goes 100% to the staff member tied to the bill, else the merchant | `ledger_only` with no split rules yet | M5 split rules and pools |
+
 ## Schema fixes made in M0
 
 See `db/README.md`: `audit_log` trigger ordering, global `opt_outs` with null merchant, truncate guards.
@@ -60,3 +73,4 @@ Append entries as `YYYY-MM-DD, question id, decision, reason, who`.
 2026-10-02, Q5, Repo and package scope use the neutral name `tap-pay` / `@tappay`; `PRODUCT_NAME` stays KakEnBetaal in dev, pending owner decision, Claude Code
 2026-10-02, -, Migrations are plain SQL files run by a small runner in packages/db (up/down, one transaction each, advisory lock), not Kysely's TS migrator, so the schema stays reviewable SQL, Claude Code
 2026-10-02, -, Apps run TypeScript through tsx in dev and production (no build step) for M0; revisit before pilot if cold start or memory matters, Claude Code
+2026-10-02, O2, Tip step implemented as a list message (see I3), Claude Code

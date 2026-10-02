@@ -5,12 +5,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./queue": "./src/queue.ts"
+    "./queue": "./src/queue.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "migrate": "node --env-file-if-exists=../../.env --import tsx src/cli/migrate.ts",
-    "seed": "node --env-file-if-exists=../../.env --import tsx src/cli/seed.ts"
+    "seed": "node --env-file-if-exists=../../.env --import tsx src/cli/seed.ts",
+    "demo-bill": "node --env-file-if-exists=../../.env --import tsx src/cli/demo-bill.ts"
   },
   "dependencies": {
     "@tappay/config": "workspace:*",

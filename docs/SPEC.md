@@ -82,6 +82,13 @@ Additional rules:
 
 Terminal: `paid` (until refund), `failed`, `expired`, `cancelled`, `refunded`. A `failed` session lets the customer retry, which creates a new session on the same bill with a new reference.
 
+Additions made in M1 (implemented in `packages/core/src/state.ts`):
+
+- `claimed|awaiting_amount → awaiting_confirm` (`skip_tip`) when the merchant has tips turned off.
+- `expire` and `cancel` are allowed from every pre-payment state, not only `awaiting_payment` (the customer can press Cancel at the confirm step; any idle session times out).
+- `expired|failed|cancelled → paid` (`payment_succeeded`): the provider's confirmation is the truth. If money was taken after the session timed out or after a failure notice, the payment is recorded and the slip is sent. If the bill was already settled, the payment is flagged `payment.needs_refund` in the audit log (refunds are M5).
+- When a session times out before payment, the bill is released (`claimed → open`) so it can be tapped again. Whether this should become `abandoned` instead is OPEN_QUESTIONS O6.
+
 All transitions are pure functions in `packages/core/state`. Illegal transitions throw and are tested exhaustively.
 
 ## 7. Tips

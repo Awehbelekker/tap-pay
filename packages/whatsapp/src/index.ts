@@ -112,3 +112,6 @@ export class SimWhatsAppClient implements WhatsAppClient {
     return this.outbox.filter((m) => m.to === to);
   }
 }
+
+export * from "./catalogue.js";
+export * from "./inbound.js";

@@ -13,11 +13,12 @@
     "lint": "eslint .",
     "test": "vitest run --no-file-parallelism",
     "test:watch": "vitest",
-    "e2e": "echo 'Playwright e2e lands in M1' && exit 0",
+    "e2e": "vitest run --no-file-parallelism apps/api/test/tapToSlip.e2e.test.ts",
     "db:migrate": "pnpm --filter @tappay/db migrate up",
     "db:rollback": "pnpm --filter @tappay/db migrate down",
     "db:seed": "pnpm --filter @tappay/db seed",
-    "gen:api": "openapi-typescript api/openapi.yaml -o packages/core/src/generated/api.ts"
+    "gen:api": "openapi-typescript api/openapi.yaml -o packages/core/src/generated/api.ts",
+    "demo:bill": "pnpm --filter @tappay/db demo-bill"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

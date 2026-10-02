@@ -100,6 +100,22 @@ paths:
       summary: Receipt page and PNG
       parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: Receipt}, '404': {$ref: '#/components/responses/Err'}}
+  /r/{receiptToken}/slip.png:
+    get:
+      tags: [public]
+      summary: Slip image (PNG, under 1 MB) for a receipt token
+      parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: PNG, content: {image/png: {schema: {type: string, format: binary}}}}, '404': {$ref: '#/components/responses/Err'}}
+  /pay/return:
+    get: {tags: [public], summary: Informational page after hosted checkout. Never marks anything paid., responses: {'200': {description: page}}}
+  /sim/outbox:
+    get:
+      tags: [public]
+      summary: Dev only (WA_MODE=sim). Messages the bot sent to one number, for the WhatsApp simulator.
+      parameters:
+        - {name: to, in: query, required: true, schema: {type: string}}
+        - {name: after, in: query, schema: {type: integer, minimum: 0}}
+      responses: {'200': {description: messages}}
   /webhooks/whatsapp:
     get: {tags: [public], summary: Meta verification handshake, responses: {'200': {description: challenge echoed}}}
     post:

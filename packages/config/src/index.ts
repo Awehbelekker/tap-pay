@@ -62,6 +62,8 @@ export const envSchema = z
     WA_ACCESS_TOKEN: optional,
     WA_APP_SECRET: z.string().min(1),
     WA_VERIFY_TOKEN: z.string().min(1),
+    /** Where tap redirects go when WA_MODE=sim (instead of wa.me). */
+    WA_SIM_URL: z.string().url().default("http://localhost:4000"),
 
     PROVIDER: z.enum(["mock", "peach", "payfast"]).default("mock"),
     SPLIT_STRATEGY: z.enum(["ledger_only", "native", "collect_then_payout"]).default("ledger_only"),

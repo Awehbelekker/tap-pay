@@ -10,8 +10,12 @@ HTTP and receive signed `bill.paid` events, and every external system sits behin
 
 ## Status
 
-**Milestone M0 (scaffolding) done.** No customer flow yet; M1 is the tap-to-slip slice.
-See `docs/MILESTONES.md`.
+**M0 (scaffolding) and M1 (tap to slip) done.** A customer can tap a static tag, claim the
+bill in WhatsApp (simulator), choose a tip, pay through the mock hosted checkout and get a
+branded slip. Next: M2 merchant modes and bill matching. See `docs/MILESTONES.md`.
+
+Try it by hand after the quick start: `pnpm demo:bill`, open http://localhost:4000, press
+**Tap tag**, then **Send**.
 
 ## Quick start
 
@@ -31,6 +35,7 @@ Checks (the CI gate):
 ```bash
 pnpm typecheck && pnpm lint && pnpm test   # integration tests run when TEST_DATABASE_URL is set
 pnpm gen:api                               # regenerate types from api/openapi.yaml
+pnpm e2e                                   # scripted tap-to-slip journey (needs TEST_DATABASE_URL)
 pnpm db:rollback                           # revert the latest migration
 ```
 
@@ -38,16 +43,17 @@ pnpm db:rollback                           # revert the latest migration
 
 | Path | What |
 | --- | --- |
-| `apps/api` | Fastify API: `/healthz`, `/readyz` now; tap, webhooks, merchant API from M1 |
+| `apps/api` | Fastify API: tap `/t/:code`, WhatsApp and provider webhooks, mock checkout, receipts `/r/:token`, health. Pay flow in `src/flow.ts` |
 | `apps/worker` | pg-boss worker; installs all queues and SAST schedules |
 | `apps/web` | React + Vite + Tailwind installable PWA shell |
 | `packages/config` | Zod env validation; refuses unsafe production config |
-| `packages/core` | `Cents` money type and maths, adapter ports, generated API types |
+| `packages/core` | `Cents` money maths, bill and session state machines, claim tokens, ledger postings, adapter ports |
 | `packages/db` | SQL migration runner, Kysely, PII crypto (AES-256-GCM + HMAC), seed, queue |
 | `packages/providers` | `PaymentProvider` mock + shared contract test suite |
-| `packages/whatsapp` | Simulator client, Meta signature check, message limits |
+| `packages/whatsapp` | Message catalogue, webhook parser, Meta signature check, simulator client, limits |
 | `packages/tag` | Tag and wa.me URL builders, verifier interface (NTAG424 SDM in M9) |
-| `packages/wa-sim` | Local WhatsApp simulator (signs requests like Meta) |
+| `packages/wa-sim` | Local WhatsApp simulator: tap a tag, chat, tap buttons, see the slip |
+| `packages/slip` | Slip PNG renderer (satori + resvg) |
 | `packages/testkit` | Fixed clock and test env |
 | `db/migrations` | Source of truth for the schema (see `db/README.md` for fixes to the baseline) |
 
