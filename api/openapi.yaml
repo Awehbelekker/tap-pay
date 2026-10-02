@@ -1,0 +1,202 @@
+openapi: 3.1.0
+info:
+  title: KakEnBetaal API
+  version: 0.1.0
+  description: HTTP contract. Money is integer cents. Keep in sync with code; types are generated with `pnpm gen:api`.
+servers:
+  - url: http://localhost:3000
+tags: [{name: public}, {name: auth}, {name: merchant}, {name: operator}]
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer, bearerFormat: JWT}
+  schemas:
+    Cents: {type: integer, minimum: 0, description: Amount in cents (ZAR)}
+    Error:
+      type: object
+      required: [code, message]
+      properties: {code: {type: string}, message: {type: string}, details: {type: object}}
+    Bill:
+      type: object
+      required: [id, type, status, subtotalCents, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        type: {type: string, enum: [fixed, open, quick_tip]}
+        status: {type: string, enum: [open, claimed, paid, cancelled, expired, abandoned, needs_follow_up, written_off, paid_other]}
+        reference: {type: string}
+        tableLabel: {type: string}
+        billCode: {type: string, description: Short code shown to customer when needed}
+        subtotalCents: {$ref: '#/components/schemas/Cents'}
+        lines: {type: array, items: {$ref: '#/components/schemas/BillLine'}}
+        assignedUserId: {type: string, format: uuid}
+        maskedCustomer: {type: string, example: '+27 ** *** 4821'}
+        tipCents: {$ref: '#/components/schemas/Cents'}
+        expiresAt: {type: string, format: date-time}
+        version: {type: integer}
+    BillLine:
+      type: object
+      required: [description, amountCents]
+      properties: {description: {type: string}, amountCents: {$ref: '#/components/schemas/Cents'}, quantity: {type: integer, minimum: 1}}
+    BillCreate:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string, enum: [fixed, open, quick_tip]}
+        tagCode: {type: string}
+        lines: {type: array, items: {$ref: '#/components/schemas/BillLine'}}
+        serviceId: {type: string, format: uuid}
+        customerMsisdn: {type: string, description: E.164; enables number-match and push-by-WhatsApp}
+        tableLabel: {type: string}
+        reference: {type: string}
+        shares: {type: array, items: {type: object, properties: {label: {type: string}, amountCents: {$ref: '#/components/schemas/Cents'}}}}
+    Payment:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        billId: {type: string, format: uuid}
+        amountCents: {$ref: '#/components/schemas/Cents'}
+        tipCents: {$ref: '#/components/schemas/Cents'}
+        status: {type: string}
+        method: {type: string}
+        paidAt: {type: string, format: date-time}
+    SplitRule:
+      type: object
+      required: [appliesTo, partyKind, basisPoints]
+      properties:
+        id: {type: string, format: uuid}
+        appliesTo: {type: string, enum: [sale, tip]}
+        serviceId: {type: string, format: uuid}
+        partyKind: {type: string, enum: [merchant, staff, pool]}
+        partyUserId: {type: string, format: uuid}
+        basisPoints: {type: integer, minimum: 0, maximum: 10000}
+  parameters:
+    IdemKey: {name: Idempotency-Key, in: header, required: false, schema: {type: string}}
+  responses:
+    Err: {description: Error, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+security: []
+paths:
+  /healthz: {get: {tags: [public], responses: {'200': {description: ok}}}}
+  /readyz: {get: {tags: [public], responses: {'200': {description: ready}, '503': {$ref: '#/components/responses/Err'}}}}
+  /t/{tagCode}:
+    get:
+      tags: [public]
+      summary: Tag tap. Verifies tag (SDM if NTAG424), resolves bill, 302 to wa.me with one-time token.
+      parameters:
+        - {name: tagCode, in: path, required: true, schema: {type: string}}
+        - {name: picc_data, in: query, schema: {type: string}}
+        - {name: cmac, in: query, schema: {type: string}}
+      responses:
+        '302': {description: Redirect to WhatsApp}
+        '404': {$ref: '#/components/responses/Err'}
+        '403': {$ref: '#/components/responses/Err'}
+  /b/{billToken}:
+    get:
+      tags: [public]
+      summary: Bill landing page for remote invoices and reminders (opens WhatsApp or shows bill)
+      parameters: [{name: billToken, in: path, required: true, schema: {type: string}}]
+      responses: {'302': {description: Redirect}, '404': {$ref: '#/components/responses/Err'}}
+  /r/{receiptToken}:
+    get:
+      tags: [public]
+      summary: Receipt page and PNG
+      parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Receipt}, '404': {$ref: '#/components/responses/Err'}}
+  /r/{receiptToken}/slip.png:
+    get:
+      tags: [public]
+      summary: Slip image (PNG, under 1 MB) for a receipt token
+      parameters: [{name: receiptToken, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: PNG, content: {image/png: {schema: {type: string, format: binary}}}}, '404': {$ref: '#/components/responses/Err'}}
+  /pay/return:
+    get: {tags: [public], summary: Informational page after hosted checkout. Never marks anything paid., responses: {'200': {description: page}}}
+  /sim/outbox:
+    get:
+      tags: [public]
+      summary: Dev only (WA_MODE=sim). Messages the bot sent to one number, for the WhatsApp simulator.
+      parameters:
+        - {name: to, in: query, required: true, schema: {type: string}}
+        - {name: after, in: query, schema: {type: integer, minimum: 0}}
+      responses: {'200': {description: messages}}
+  /webhooks/whatsapp:
+    get: {tags: [public], summary: Meta verification handshake, responses: {'200': {description: challenge echoed}}}
+    post:
+      tags: [public]
+      summary: Inbound WhatsApp events. Requires valid X-Hub-Signature-256.
+      responses: {'200': {description: accepted}, '401': {$ref: '#/components/responses/Err'}}
+  /webhooks/provider/{provider}:
+    post:
+      tags: [public]
+      summary: Provider payment events. Signature verified by adapter. Idempotent.
+      parameters: [{name: provider, in: path, required: true, schema: {type: string, enum: [mock, peach, payfast]}}]
+      responses: {'200': {description: accepted}, '401': {$ref: '#/components/responses/Err'}}
+  /mock-checkout/{ref}:
+    get: {tags: [public], summary: Mock hosted checkout (dev only), parameters: [{name: ref, in: path, required: true, schema: {type: string}}], responses: {'200': {description: page}}}
+    post: {tags: [public], summary: Resolve mock checkout, parameters: [{name: ref, in: path, required: true, schema: {type: string}}], responses: {'200': {description: ok}}}
+
+  /v1/auth/otp/request:
+    post: {tags: [auth], summary: Send WhatsApp OTP to a staff number, requestBody: {content: {application/json: {schema: {type: object, required: [msisdn], properties: {msisdn: {type: string}}}}}}, responses: {'202': {description: sent}}}
+  /v1/auth/otp/verify:
+    post: {tags: [auth], summary: Verify OTP and set PIN on first use, requestBody: {content: {application/json: {schema: {type: object, required: [msisdn, code], properties: {msisdn: {type: string}, code: {type: string}, pin: {type: string}}}}}}, responses: {'200': {description: tokens}}}
+  /v1/auth/login:
+    post: {tags: [auth], summary: msisdn + PIN login, responses: {'200': {description: tokens}, '401': {$ref: '#/components/responses/Err'}}}
+  /v1/auth/refresh:
+    post: {tags: [auth], summary: Rotate refresh token, responses: {'200': {description: tokens}}}
+
+  /v1/merchant/bills:
+    get:
+      tags: [merchant]
+      security: [{bearer: []}]
+      parameters:
+        - {name: status, in: query, schema: {type: string}}
+        - {name: mine, in: query, schema: {type: boolean}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses: {'200': {description: list, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/Bill'}}, nextCursor: {type: string}}}}}}}
+    post:
+      tags: [merchant]
+      security: [{bearer: []}]
+      parameters: [{$ref: '#/components/parameters/IdemKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BillCreate'}}}}
+      responses: {'201': {description: created, content: {application/json: {schema: {$ref: '#/components/schemas/Bill'}}}}, '409': {$ref: '#/components/responses/Err'}}
+  /v1/merchant/bills/{id}:
+    get: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: bill}}}
+    patch: {tags: [merchant], security: [{bearer: []}], summary: Edit lines while open (version check), parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: updated}, '409': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/bills/{id}/cancel: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: cancelled}}}}
+  /v1/merchant/bills/{id}/release: {post: {tags: [merchant], security: [{bearer: []}], summary: Release a wrongly claimed bill, parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: released}}}}
+  /v1/merchant/bills/{id}/remind: {post: {tags: [merchant], security: [{bearer: []}], summary: Send manual reminder (counts toward cap), parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'202': {description: queued}, '429': {$ref: '#/components/responses/Err'}}}}
+  /v1/merchant/bills/{id}/mark-paid-other: {post: {tags: [merchant], security: [{bearer: []}], summary: Paid by cash or other method, parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}}}}
+  /v1/merchant/bills/{id}/write-off: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: ok}}}}
+  /v1/merchant/events:
+    get: {tags: [merchant], security: [{bearer: []}], summary: Server-sent events stream, responses: {'200': {description: text/event-stream, content: {text/event-stream: {schema: {type: string}}}}}}
+  /v1/merchant/services:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
+    post: {tags: [merchant], security: [{bearer: []}], responses: {'201': {description: created}}}
+  /v1/merchant/staff:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
+    post: {tags: [merchant], security: [{bearer: []}], summary: Invite staff by number, responses: {'201': {description: invited}}}
+  /v1/merchant/tags:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
+    post: {tags: [merchant], security: [{bearer: []}], summary: Claim/assign a tag by code, responses: {'201': {description: assigned}}}
+  /v1/merchant/tags/{id}/revoke: {post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: revoked}}}}
+  /v1/merchant/split-rules:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/SplitRule'}}}}}}}
+    put: {tags: [merchant], security: [{bearer: []}], summary: Replace rule set. Each applies_to group must total 10000 bp., responses: {'200': {description: saved}, '422': {$ref: '#/components/responses/Err'}}}
+  /v1/merchant/payments:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Payment'}}}}}}}
+  /v1/merchant/payments/{id}/refund:
+    post: {tags: [merchant], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}, {$ref: '#/components/parameters/IdemKey'}], responses: {'202': {description: refund started}}}
+  /v1/merchant/payouts: {get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}}
+  /v1/merchant/balances: {get: {tags: [merchant], security: [{bearer: []}], summary: Ledger balances per party, responses: {'200': {description: balances}}}}
+  /v1/merchant/reports/summary: {get: {tags: [merchant], security: [{bearer: []}], parameters: [{name: from, in: query, schema: {type: string, format: date}}, {name: to, in: query, schema: {type: string, format: date}}], responses: {'200': {description: totals}}}}
+  /v1/merchant/reports/export.csv: {get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: csv}}}}
+  /v1/merchant/devices:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: list}}}
+    post: {tags: [merchant], security: [{bearer: []}], summary: Register push subscription, responses: {'201': {description: ok}}}
+  /v1/merchant/settings:
+    get: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: settings}}}
+    patch: {tags: [merchant], security: [{bearer: []}], responses: {'200': {description: saved}}}
+
+  /v1/operator/merchants:
+    get: {tags: [operator], security: [{bearer: []}], responses: {'200': {description: list}}}
+    post: {tags: [operator], security: [{bearer: []}], summary: Onboard merchant, responses: {'201': {description: created}}}
+  /v1/operator/tags/batch: {post: {tags: [operator], security: [{bearer: []}], summary: Register a batch of tags (UID list), responses: {'201': {description: ok}}}}
+  /v1/operator/webhook-events/{id}/replay: {post: {tags: [operator], security: [{bearer: []}], parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'202': {description: queued}}}}
+  /v1/operator/health: {get: {tags: [operator], security: [{bearer: []}], summary: Queue depth, failed webhooks, pending payments, responses: {'200': {description: health}}}}

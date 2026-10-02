@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp simulator</title>
+<style>
+  :root { --bg: #efeae2; --me: #d9fdd3; --them: #ffffff; --bar: #075e54; --text: #111b21; --link: #027eb5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: #ccc; color: var(--text); display: flex; justify-content: center; }
+  .phone { width: 100%; max-width: 420px; height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+  header { background: var(--bar); color: #fff; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  header input { width: 130px; padding: 4px 6px; border: 0; border-radius: 4px; }
+  header button { border: 0; border-radius: 4px; padding: 4px 8px; background: #25d366; color: #063; font-weight: 600; cursor: pointer; }
+  #chat { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .msg { max-width: 85%; padding: 6px 10px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: 0 1px 1px rgba(0,0,0,.1); }
+  .me { align-self: flex-end; background: var(--me); }
+  .them { align-self: flex-start; background: var(--them); }
+  .sys { align-self: center; font-size: 12px; color: #54656f; background: #fff8; }
+  .them a { color: var(--link); }
+  .them img { display: block; max-width: 100%; border-radius: 6px; margin-bottom: 4px; }
+  .opts { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .opts button { border: 0; border-top: 1px solid #e9edef; background: none; color: var(--link); padding: 6px; font: inherit; cursor: pointer; }
+  .opts button:disabled { color: #999; cursor: default; }
+  form { display: flex; gap: 8px; padding: 8px; background: #f0f2f5; }
+  form input { flex: 1; padding: 10px 12px; border: 0; border-radius: 20px; }
+  form button { border: 0; border-radius: 20px; padding: 0 16px; background: var(--bar); color: #fff; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <header>
+    <label>From <input id="from" value="27820000482" inputmode="numeric"></label>
+    <label>Tag <input id="tag" value="DEMO-COACH-1" style="width:120px"></label>
+    <button id="tap" type="button">Tap tag</button>
+  </header>
+  <div id="chat"><div class="msg sys">Tap the tag, then press Send.</div></div>
+  <form id="f">
+    <input id="text" placeholder="Message" autocomplete="off">
+    <button>Send</button>
+  </form>
+</div>
+<script>
+  const chat = document.getElementById("chat");
+  const input = document.getElementById("text");
+  const from = () => document.getElementById("from").value.trim();
+  let after = 0;
+
+  function bubble(cls) { const d = document.createElement("div"); d.className = "msg " + cls; chat.appendChild(d); return d; }
+  function scroll() { chat.scrollTop = chat.scrollHeight; }
+  function textWithLinks(el, text) {
+    for (const part of String(text).split(/(https?:\/\/\S+)/)) {
+      if (/^https?:\/\//.test(part)) { const a = document.createElement("a"); a.href = part; a.textContent = part; a.target = "_blank"; el.appendChild(a); }
+      else el.appendChild(document.createTextNode(part));
+    }
+  }
+  function sys(text) { bubble("sys").textContent = text; scroll(); }
+
+  async function post(payload) {
+    try {
+      const r = await fetch("/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: from(), name: "Sim User", ...payload }) });
+      const j = await r.json();
+      if (j.apiStatus !== 200) sys("API answered " + (j.apiStatus ?? j.error));
+    } catch { sys("Simulator could not reach the API"); }
+    setTimeout(poll, 150);
+  }
+
+  function render(m) {
+    const d = bubble("them");
+    if (m.kind === "image") {
+      const img = document.createElement("img"); img.src = m.imageUrl; img.alt = "Slip"; d.appendChild(img);
+      textWithLinks(d, m.caption || "");
+    } else if (m.kind === "template") {
+      textWithLinks(d, "[template " + m.template + "] " + m.params.join(" | "));
+    } else {
+      textWithLinks(d, m.body);
+    }
+    const options = m.kind === "buttons" ? m.buttons.map(b => ({ ...b, list: false })) : m.kind === "list" ? m.rows.map(r => ({ ...r, list: true })) : [];
+    if (options.length) {
+      const box = document.createElement("div"); box.className = "opts";
+      for (const o of options) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = o.title;
+        b.onclick = () => { box.querySelectorAll("button").forEach(x => x.disabled = true); bubble("me").textContent = o.title; scroll(); post({ replyId: o.id, title: o.title, list: o.list }); };
+        box.appendChild(b);
+      }
+      d.appendChild(box);
+    }
+    scroll();
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/outbox?" + new URLSearchParams({ to: from(), after }));
+      const j = await r.json();
+      for (const m of j.items || []) { render(m); after = Math.max(after, m.seq); }
+    } catch { /* API not up yet */ }
+  }
+  setInterval(poll, 1000);
+
+  document.getElementById("from").addEventListener("change", () => { after = 0; chat.innerHTML = ""; poll(); });
+
+  // Mimics the phone reading the tag and WhatsApp opening with prefilled text.
+  document.getElementById("tap").onclick = async () => {
+    const r = await fetch("/tap?" + new URLSearchParams({ code: document.getElementById("tag").value.trim() }));
+    const j = await r.json();
+    if (j.text) { input.value = j.text; input.focus(); } else sys("Tag not verified: ask staff to take payment another way");
+  };
+  const pre = new URLSearchParams(location.search).get("text");
+  if (pre) input.value = pre;
+
+  document.getElementById("f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    bubble("me").textContent = text; scroll();
+    input.value = "";
+    post({ text });
+  });
+</script>
+</body>
+</html>

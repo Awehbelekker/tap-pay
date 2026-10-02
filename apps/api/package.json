@@ -1,0 +1,28 @@
+{
+  "name": "@tappay/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/main.ts",
+    "start": "node --import tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@tappay/config": "workspace:*",
+    "@tappay/core": "workspace:*",
+    "@tappay/db": "workspace:*",
+    "fastify": "^5.6.0",
+    "pino": "^10.0.0",
+    "tsx": "^4.20.0",
+    "@tappay/providers": "workspace:*",
+    "@tappay/slip": "workspace:*",
+    "@tappay/tag": "workspace:*",
+    "@tappay/whatsapp": "workspace:*"
+  },
+  "devDependencies": {
+    "@tappay/testkit": "workspace:*",
+    "@tappay/wa-sim": "workspace:*"
+  }
+}

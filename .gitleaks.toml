@@ -1,0 +1,11 @@
+# Default gitleaks rules, minus files that hold deliberate dev-only placeholders.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "dev placeholders and test fixtures"
+paths = [
+  '''^\.env\.example$''',
+  '''^packages/testkit/src/index\.ts$''',
+  '''(^|/)test/.*\.test\.ts$''',
+]

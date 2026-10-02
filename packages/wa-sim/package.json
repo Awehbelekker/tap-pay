@@ -1,0 +1,13 @@
+{
+  "name": "@tappay/wa-sim",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/payload.ts" },
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": { "tsx": "^4.20.0" },
+  "devDependencies": { "@tappay/whatsapp": "workspace:*" }
+}

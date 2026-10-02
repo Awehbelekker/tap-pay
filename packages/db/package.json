@@ -1,0 +1,27 @@
+{
+  "name": "@tappay/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./queue": "./src/queue.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "migrate": "node --env-file-if-exists=../../.env --import tsx src/cli/migrate.ts",
+    "seed": "node --env-file-if-exists=../../.env --import tsx src/cli/seed.ts",
+    "demo-bill": "node --env-file-if-exists=../../.env --import tsx src/cli/demo-bill.ts"
+  },
+  "dependencies": {
+    "@tappay/config": "workspace:*",
+    "@tappay/core": "workspace:*",
+    "kysely": "^0.28.0",
+    "pg": "^8.16.0",
+    "pg-boss": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.0"
+  }
+}
